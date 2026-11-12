@@ -50,12 +50,6 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 env = Environment(loader=FileSystemLoader("templates"))
-from fastapi.responses import RedirectResponse
-
-@app.get("/")
-def read_root():
-    return RedirectResponse(url="/login")  # أو /doctor حسب ما تفضل
-
 
 USERS = {
     "ct_user": {"password": "123", "role": "technician", "modality": "CT", "name": "فني الطبقي المحوري"},
