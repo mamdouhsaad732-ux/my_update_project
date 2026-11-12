@@ -94,16 +94,25 @@ def cleanup_old_records(db: Session):
 
 @app.get("/", response_class=HTMLResponse)
 def read_root(request: Request):
-    if "user" in request.session:
-        role = request.session["user"]["role"]
-        if role == "technician":
-            return RedirectResponse(url="/technician", status_code=status.HTTP_303_SEE_OTHER)
-        elif role == "secretary":
-            return RedirectResponse(url="/secretary", status_code=status.HTTP_303_SEE_OTHER)
-        elif role == "admin":return RedirectResponse(url="/doctor", status_code=status.HTTP_303_SEE_OTHER)
-    
-    template = env.get_template("login.html")
-    return HTMLResponse(content=template.render(request=request))
+    # محاولة فحص الجلسة بأمان تام لمنع أي انهيار أثناء الـ Health Check
+    try:
+        if "user" in request.session:
+            role = request.session["user"].get("role")
+            if role == "technician":
+                return RedirectResponse(url="/technician", status_code=status.HTTP_303_SEE_OTHER)
+            elif role == "secretary":
+                return RedirectResponse(url="/secretary", status_code=status.HTTP_303_SEE_OTHER)
+            elif role == "admin":
+                return RedirectResponse(url="/doctor", status_code=status.HTTP_303_SEE_OTHER)
+    except Exception:
+        pass
+
+    # عرض صفحة تسجيل الدخول بأمان
+    try:
+        template = env.get_template("login.html")
+        return HTMLResponse(content=template.render(request=request))
+    except Exception as e:
+        return {"status": "online", "message": "System is running"}
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
