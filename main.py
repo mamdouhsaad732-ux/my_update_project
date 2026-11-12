@@ -15,6 +15,7 @@ from typing import List
 import pydicom
 import numpy as np
 import io
+
 SQLALCHEMY_DATABASE_URL = "sqlite:///./medical_pacs.db"
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -50,6 +51,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 env = Environment(loader=FileSystemLoader("templates"))
+
 
 USERS = {
     "ct_user": {"password": "123", "role": "technician", "modality": "CT", "name": "فني الطبقي المحوري"},
@@ -94,25 +96,16 @@ def cleanup_old_records(db: Session):
 
 @app.get("/", response_class=HTMLResponse)
 def read_root(request: Request):
-    # محاولة فحص الجلسة بأمان تام لمنع أي انهيار أثناء الـ Health Check
-    try:
-        if "user" in request.session:
-            role = request.session["user"].get("role")
-            if role == "technician":
-                return RedirectResponse(url="/technician", status_code=status.HTTP_303_SEE_OTHER)
-            elif role == "secretary":
-                return RedirectResponse(url="/secretary", status_code=status.HTTP_303_SEE_OTHER)
-            elif role == "admin":
-                return RedirectResponse(url="/doctor", status_code=status.HTTP_303_SEE_OTHER)
-    except Exception:
-        pass
-
-    # عرض صفحة تسجيل الدخول بأمان
-    try:
-        template = env.get_template("login.html")
-        return HTMLResponse(content=template.render(request=request))
-    except Exception as e:
-        return {"status": "online", "message": "System is running"}
+    if "user" in request.session:
+        role = request.session["user"]["role"]
+        if role == "technician":
+            return RedirectResponse(url="/technician", status_code=status.HTTP_303_SEE_OTHER)
+        elif role == "secretary":
+            return RedirectResponse(url="/secretary", status_code=status.HTTP_303_SEE_OTHER)
+        elif role == "admin":return RedirectResponse(url="/doctor", status_code=status.HTTP_303_SEE_OTHER)
+    
+    template = env.get_template("login.html")
+    return HTMLResponse(content=template.render(request=request))
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
@@ -205,19 +198,13 @@ def doctor_delete_record(record_id: int, request: Request, db: Session = Depends
 
 # --- عرض جميع الصور في نفس الصفحة للأدمن (بدون روابط خارجية) ---
 import os
-from fastapi import FastAPI, Request, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
-# ملاحظة: قم باستيراد get_db و PatientRecord من مشروعك الفعلي
-# from .database import get_db
-# from .models import PatientRecord
-
-app = FastAPI()
-
 @app.get("/doctor/view-images/{record_id}", response_class=HTMLResponse)
 def view_patient_images(record_id: int, request: Request, db: Session = Depends(get_db)):
-    # 1. التحقق من صلاحية الأدمن أولاً
+    # 1. التحقق من صلاحية الأدمن أولاً (الأمان أولاً)
     if "user" not in request.session or request.session["user"]["role"] != "admin":
         return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
     
@@ -226,66 +213,100 @@ def view_patient_images(record_id: int, request: Request, db: Session = Depends(
     if record is None:
         raise HTTPException(status_code=404, detail="السجل غير موجود")
 
-    # 3. جلب مسار ملفات المريض
+    # 3. جلب مسار ملفات المريض بعد نجاح التحقق
     patient_dir = os.path.join("static", "dicoms", str(record_id))
     dicom_urls = []
     if os.path.exists(patient_dir):
         files = sorted(os.listdir(patient_dir))
-        # استخراج روابط الصور وتجنب الملفات المخفية
         dicom_urls = [f"/static/dicoms/{record_id}/{f}" for f in files if not f.startswith('.')]
 
-    # 4. بناء قالب الـ HTML مع الـ Lightbox
-    images_html = ""
-    if dicom_urls:
-        for url in dicom_urls:
-            images_html += f'''
-            <div style="background: #1e293b; border-radius: 12px; padding: 10px; cursor: pointer; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.3);">
-                <img src="{url}" alt="Scan" style="width: 200px; height: 150px; object-fit: cover; border-radius: 8px;" onclick="openLightbox('{url}')">
-            </div>
-            '''
-    else:
-        images_html = '<p style="color: #94a3b8; font-size: 18px; width: 100%; text-align: center;">لا توجد صور مسجلة لهذا المريض حتى الآن.</p>'
-
+    # 4. بناء صفحة الـ HTML مع الـ Lightbox وأزرار التنقل
     html_content = f"""
     <!DOCTYPE html>
     <html lang="ar" dir="rtl">
     <head>
         <meta charset="UTF-8">
-        <title>معاينة صور الفحص للأدمن</title>
+        <title>عرض وفحص الصور</title>
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
         <style>
             body {{ font-family: Tahoma, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 20px; }}
             .container {{ max-width: 1000px; margin: auto; text-align: center; }}
-            .btn-back {{ background: #e74c3c; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; display: inline-block; margin-bottom: 20px; font-weight: bold; }}
-            .gallery {{ display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; margin-top: 20px; }}
-            /* Lightbox Modal */
-            #lightbox {{ display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); justify-content: center; align-items: center; z-index: 1000; }}
-            #lightbox img {{ max-width: 90%; max-height: 90%; border-radius: 8px; box-shadow: 0 0 20px rgba(255,255,255,0.2); }}
-            .close-btn {{ position: absolute; top: 20px; right: 30px; font-size: 40px; color: white; cursor: pointer; }}
+            .gallery {{ display: flex; gap: 15px; overflow-x: auto; padding: 20px; justify-content: center; flex-wrap: wrap; }}
+            .scan-img {{ width: 150px; height: 150px; object-fit: cover; border-radius: 8px; cursor: pointer; border: 2px solid #38bdf8; transition: 0.3s; }}
+            .scan-img:hover {{ transform: scale(1.05); }}
+            
+            #imageLightbox {{ display:none; position:fixed; z-index:9999; top:0; left:0; width:100%; height:100%; background-color:rgba(0,0,0,0.95); text-align:center; padding:20px; box-sizing:border-box; }}
+            #lightboxImg {{ max-width:85%; max-height:85vh; margin-top:50px; object-fit:contain; border-radius:6px; box-shadow:0 0 25px rgba(0,0,0,0.8); }}
         </style>
     </head>
     <body>
         <div class="container">
-            <a href="/doctor" class="btn-back">← عودة لوحة التحكم</a>
-            <h2 style="color: #38bdf8;">معاينة صور الفحص للأدمن</h2>
+            <h2>معاينة صور الفحص للأدمن</h2>
+            <a href="/doctor" style="background: #e74c3c; color: white; padding: 8px 16px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block; margin-bottom: 20px;">
+                <i class="fas fa-arrow-right"></i> عودة لوحة التحكم
+            </a>
+            
             <div class="gallery">
-                {images_html}
+    """
+
+    # حلقة إضافة روابط الصور أفقياً
+    for url in dicom_urls:
+        html_content += f'<img src="{url}" class="scan-img" alt="صورة فحص">'
+        
+    html_content += f"""
             </div>
         </div>
 
-        <!-- Lightbox Overlay -->
-        <div id="lightbox" onclick="closeLightbox()">
-            <span class="close-btn">×</span>
-            <img id="lightbox-img" src="">
+        <!-- نافذة الـ Lightbox للتكبير والتنقل -->
+        <div id="imageLightbox">
+            <button onclick="closeLightbox()" style="position:absolute; top:20px; right:30px; background:#e74c3c; color:white; border:none; padding:10px 20px; font-size:16px; border-radius:5px; cursor:pointer; z-index:10000; font-weight:bold;">
+                <i class="fas fa-arrow-right"></i> عودة
+            </button>
+
+            <button onclick="changeImage(-1)" style="position:absolute; top:50%; left:20px; transform:translateY(-50%); background:rgba(255,255,255,0.2); color:white; border:none; padding:15px 20px; font-size:24px; cursor:pointer; border-radius:50%;">
+                ❮
+            </button>
+
+            <img id="lightboxImg" src="">
+
+            <button onclick="changeImage(1)" style="position:absolute; top:50%; right:20px; transform:translateY(-50%); background:rgba(255,255,255,0.2); color:white; border:none; padding:15px 20px; font-size:24px; cursor:pointer; border-radius:50%;">
+                ❯
+            </button>
         </div>
 
         <script>
-            function openLightbox(url) {{
-                document.getElementById('lightbox-img').src = url;
-                document.getElementById('lightbox').style.display = 'flex';
+        let currentImageIndex = 0;
+        let imagesList = [];
+
+        document.addEventListener("DOMContentLoaded", function() {{
+            const imgElements = document.querySelectorAll('.scan-img'); 
+            imgElements.forEach((img, index) => {{
+                imagesList.push(img.src);
+                img.onclick = function() {{
+                    currentImageIndex = index;
+                    openLightbox(imagesList[currentImageIndex]);
+                }}
+            }});
+        }});
+
+        function openLightbox(src) {{
+            document.getElementById('lightboxImg').src = src;
+            document.getElementById('imageLightbox').style.display = "block";
+        }}
+
+        function closeLightbox() {{
+            document.getElementById('imageLightbox').style.display = 'none';
+        }}
+
+        function changeImage(direction) {{
+            currentImageIndex += direction;
+            if (currentImageIndex >= imagesList.length) {{
+                currentImageIndex = 0; 
+            }} else if (currentImageIndex < 0) {{
+                currentImageIndex = imagesList.length - 1; 
             }}
-            function closeLightbox() {{
-                document.getElementById('lightbox').style.display = 'none';
-            }}
+            document.getElementById('lightboxImg').src = imagesList[currentImageIndex];
+        }}
         </script>
     </body>
     </html>
