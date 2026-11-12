@@ -15,7 +15,6 @@ from typing import List
 import pydicom
 import numpy as np
 import io
-
 SQLALCHEMY_DATABASE_URL = "sqlite:///./medical_pacs.db"
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -51,6 +50,11 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 env = Environment(loader=FileSystemLoader("templates"))
+from fastapi.responses import RedirectResponse
+
+@app.get("/")
+def read_root():
+    return RedirectResponse(url="/login")  # أو /doctor حسب ما تفضل
 
 
 USERS = {
