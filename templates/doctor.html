@@ -94,6 +94,61 @@
                 {% endif %}
             </tbody>
         </table>
+        {% if dicom_urls %}
+<button onclick="changeImage(-1)" style="position:absolute; top:50%; left:20px; transform:translateY(-50%); background:rgba(255,255,255,0.2); color:white; border:none; padding:15px 20px; font-size:24px; cursor:pointer; border-radius:50%;">
+    ❮
+</button>
+
+<img id="lightboxImg" src="" style="max-width:85%; max-height:85vh; margin-top:50px; object-fit:contain; border-radius:6px; box-shadow:0 0 25px rgba(0,0,0,0.8);">
+
+<button onclick="changeImage(1)" style="position:absolute; top:50%; right:20px; transform:translateY(-50%); background:rgba(255,255,255,0.2); color:white; border:none; padding:15px 20px; font-size:24px; cursor:pointer; border-radius:50%;">
+    ❯
+</button></div>
+
+<script>
+let currentImageIndex = 0;
+let imagesList = [];
+
+document.addEventListener("DOMContentLoaded", function() {
+    const imgElements = document.querySelectorAll('.scan-img'); 
+    imgElements.forEach((img, index) => {
+        imagesList.push(img.src);
+        img.onclick = function() {
+            currentImageIndex = index;
+            openLightbox(imagesList[currentImageIndex]);
+        }
+    });
+});
+
+function openLightboxByUrl(url) {
+    const foundIndex = imagesList.findIndex(item => item.endsWith(url));
+    currentImageIndex = foundIndex !== -1 ? foundIndex : 0;
+    openLightbox(imagesList[currentImageIndex] || url);
+}
+
+function openLightbox(src) {
+    const lightbox = document.getElementById('imageLightbox');
+    const lightboxImg = document.getElementById('lightboxImg');
+    lightboxImg.src = src;
+    lightbox.style.display = "block";
+}
+
+function closeLightbox() {
+    document.getElementById('imageLightbox').style.display = 'none';
+}
+
+function changeImage(direction) {
+    if (imagesList.length === 0) return;
+    currentImageIndex += direction;
+    if (currentImageIndex >= imagesList.length) {
+        currentImageIndex = 0; 
+    } else if (currentImageIndex < 0) {
+        currentImageIndex = imagesList.length - 1; 
+    }
+    document.getElementById('lightboxImg').src = imagesList[currentImageIndex];
+}
+</script>
+{% endif %}
     </div>
 </body>
 </html>
