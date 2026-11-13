@@ -63,6 +63,13 @@
         } else {
             alert("لا توجد ملفات DICOM متاحة لهذا الفحص.");
         }
+    // جلب الروابط للتأكد من وصولها
+     var dicomUrls = JSON.parse('{{ dicom_urls | tojson | safe }}');
+    
+    // طباعة الروابط في الـ Console للتأكد أن الملفات موجودة وواصلة للأدمن
+    console.log("الملفات الواصلة لعارض الأدمن:", dicomUrls);
+
     </script>
+    
 </body>
 </html>
