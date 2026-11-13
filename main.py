@@ -15,7 +15,7 @@ from PIL import Image
 from typing import List
 import pydicom
 import numpy as np
-import iخ
+import io
 
 
 SQLALCHEMY_DATABASE_URL = "sqlite:///./medical_pacs.db"
