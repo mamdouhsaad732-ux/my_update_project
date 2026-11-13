@@ -135,38 +135,28 @@ def logout(request: Request):
     return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
 
 @app.get("/view-scan/{record_id}", response_class=HTMLResponse) 
-def view_scan(request: Request, record_id: int, db: Session = Depends(get_db)): 
-    # 1. جلب بيانات السجل 
+def view_scan(request: Request, record_id: int, db: Session = Depends(get_db)):
+    # 1. التحقق من صلاحية الأدمن
+    if "user" not in request.session or request.session["user"]["role"] != "admin":
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+
+    # 2. جلب بيانات السجل
     record = db.query(PatientRecord).filter(PatientRecord.id == record_id).first() 
     if not record: 
         raise HTTPException(status_code=404, detail="السجل غير موجود")
-# 2. تحديد مسار المجلد الذي يحتوي على صور المريض
-    patient_dir = os.path.join("static", "dicoms", str(record_id))
-    os.makedirs(patient_dir, exist_ok=True)
-    for file in File:
-     if file.filename:
-      file_path = os.path.join(patient_dir, file.filename)
-    with open(file_path, "wb") as buffer:
-            buffer.write(file.file.read())
-    dicom_urls = []
-# إذا كان هناك مجلد برقم السجل، نجمع كافة ملفات DICOM من داخله
-    if os.path.exists(patient_dir):
-     files = sorted(os.listdir(patient_dir))
-     dicom_urls = [f"/static/dicoms/{record_id}/{f}" for f in files if not f.startswith('.')]
 
-# إذا لم يكن المجلد موجوداً، نتحقق مما إذا كان هناك ملف مائل مباشر ينتهي بـ .dcm
-    if not dicom_urls:
-        
-     direct_file = os.path.join("static", "dicoms", f"{record_id}.dcm")
-    if os.path.exists(direct_file):
-        dicom_urls = [f"/static/dicoms/{record_id}.dcm"]
-# 3. تمرير قائمة الروابط الكاملة إلى الواجهة
+    # 3. جلب مسارات الصور اعتماداً على الحقل image_path في قاعدة البيانات
+    dicom_urls = []
+    if record.image_path:
+        dicom_urls = [p.strip() for p in record.image_path.split(",") if p.strip()]
+
+    # 4. إرسال البيانات إلى صفحة المعاينة المستقلة view_scan.html
     template = env.get_template("view_scan.html")
     return HTMLResponse(content=template.render(
-    request=request, 
-    record=record, 
-    dicom_urls=dicom_urls
-))
+        request=request, 
+        record=record, 
+        dicom_urls=dicom_urls
+    ))
 
 @app.get("/doctor", response_class=HTMLResponse)
 def doctor_dashboard(request: Request, db: Session = Depends(get_db)):
@@ -199,39 +189,6 @@ def doctor_delete_record(record_id: int, request: Request, db: Session = Depends
         
     return RedirectResponse(url="/doctor", status_code=status.HTTP_303_SEE_OTHER)
 
-# --- عرض جميع الصور في نفس الصفحة للأدمن (بدون روابط خارجية) ---
-import os
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy.orm import Session
-
-@app.get("/doctor/view-images/{record_id}", response_class=HTMLResponse)
-def view_patient_images(record_id: int, request: Request, db: Session = Depends(get_db)):
-    # 1. التحقق من صلاحية الأدمن
-    if "user" not in request.session or request.session["user"]["role"] != "admin":
-        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
-    
-    # 2. جلب السجل المحدد
-    record = db.query(PatientRecord).filter(PatientRecord.id == record_id).first()
-    if record is None:
-        raise HTTPException(status_code=404, detail="السجل غير موجود")
-
-    # 3. جلب جميع السجلات لكي يبقى جدول لوحة التحكم ظاهراً ولا يظهر فارغاً
-    records = db.query(PatientRecord).all()
-
-    # 4. جلب مسارات الصور من قاعدة البيانات
-    dicom_urls = []
-    if record.image_path:
-        dicom_urls = [p.strip() for p in record.image_path.split(",") if p.strip()]
-
-    # 5. إرسال البيانات كاملة لملف doctor.html
-    return templates.TemplateResponse("doctor.html", {
-        "request": request,
-        "record": record,
-        "records": records,
-        "dicom_urls": dicom_urls,
-        "active_record_id": record_id
-    })
 # --- مسارات الأرشيف ---
 
 
