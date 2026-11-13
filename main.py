@@ -207,23 +207,30 @@ from sqlalchemy.orm import Session
 
 @app.get("/doctor/view-images/{record_id}", response_class=HTMLResponse)
 def view_patient_images(record_id: int, request: Request, db: Session = Depends(get_db)):
+    # 1. التحقق من صلاحية الأدمن
     if "user" not in request.session or request.session["user"]["role"] != "admin":
         return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
     
+    # 2. جلب السجل المحدد
     record = db.query(PatientRecord).filter(PatientRecord.id == record_id).first()
     if record is None:
         raise HTTPException(status_code=404, detail="السجل غير موجود")
 
-    # جلب الروابط من قاعدة البيانات
+    # 3. جلب جميع السجلات لكي يبقى جدول لوحة التحكم ظاهراً ولا يظهر فارغاً
+    records = db.query(PatientRecord).all()
+
+    # 4. جلب مسارات الصور من قاعدة البيانات
     dicom_urls = []
     if record.image_path:
         dicom_urls = [p.strip() for p in record.image_path.split(",") if p.strip()]
 
-    # إرسالها لملف doctor.html مباشرة
+    # 5. إرسال البيانات كاملة لملف doctor.html
     return templates.TemplateResponse("doctor.html", {
         "request": request,
         "record": record,
-        "dicom_urls": dicom_urls
+        "records": records,
+        "dicom_urls": dicom_urls,
+        "active_record_id": record_id
     })
 # --- مسارات الأرشيف ---
 
