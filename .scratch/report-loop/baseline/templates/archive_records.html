@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <title>سجلات تاريخ: {{ day }}</title>
+    <style>
+        body { font-family: Tahoma, sans-serif; background: #f8fafc; margin: 0; padding: 30px; color: #1e293b; }
+        .container { max-width: 1250px; background: white; margin: auto; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.04); border: 1px solid #e2e8f0; }
+        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #1e3a8a; padding-bottom: 15px; margin-bottom: 25px; }
+        .header h2 { color: #1e3a8a; margin: 0; font-size: 20px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; margin-bottom: 25px; }
+        th, td { border: 1px solid #e2e8f0; padding: 12px 10px; text-align: center; font-size: 13px; vertical-align: middle; }
+        th { background: #1e3a8a; color: white; font-weight: 600; }
+        tr:nth-child(even) { background: #f8fafc; }
+        .qr-img { width: 50px; height: 50px; object-fit: contain; border: 1px solid #cbd5e1; border-radius: 4px; padding: 2px; background: white; }
+        .btn { background: #2563eb; color: white; padding: 6px 12px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block; font-size: 13px; }
+        .btn:hover { background: #1d4ed8; }
+        .btn-save { background: #16a34a; border: none; cursor: pointer; padding: 6px 14px; color: white; border-radius: 6px; font-weight: bold; font-size: 13px; }
+        .btn-save:hover { background: #15803d; }
+        textarea { width: 100%; height: 60px; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-family: Tahoma; font-size: 13px; resize: vertical; }
+        .btn-back { background: #64748b; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-weight: bold; font-size: 14px; display: inline-block; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h2>سجلات الفحوصات ليوم: {{ day }} ({{ modality }})</h2>
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>رقم السجل</th>
+                    <th>اسم المريض</th>
+                    <th>تاريخ الولادة</th>
+                    <th>صورة الفحص</th>
+                    <th>رمز الـ QR</th>
+                    <th>التقرير الطبي التشخيصي</th>
+                    <th>الإجراءات</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if records %}
+                    {% for record in records %}
+                    <tr>
+                        <td><b>#{{ record.id }}</b></td>
+                        <td>{{ record.patient_name }}</td>
+                        <td>{{ record.birth_date }}</td>
+                        <td><a href="{{ record.image_path }}" target="_self" class="btn">عرض الصورة</a></td>
+                        <td>
+                            {% if record.qr_code and record.qr_code != "temp.png" %}
+                                <img src="/static/qrs/{{ record.qr_code }}" class="qr-img" alt="QR">
+                            {% else %}
+                                <span>-</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <form action="/save-report" method="post" onsubmit="return confirm('هل أنت متأكد من حفظ وتحديث التقرير الطبي؟');">
+                                <input type="hidden" name="record_id" value="{{ record.id }}">
+                                <textarea name="report_text">{{ record.report }}</textarea>
+                                <br>
+                                <button type="submit" class="btn-save" style="margin-top: 5px;">حفظ التقرير</button>
+                            </form>
+                        </td>
+                        <td>
+                            <a href="/download-report/{{ record.id }}" class="btn" style="background: #0284c7; margin-bottom: 5px; display: block;">تحميل Word</a>
+                            <a href="/patient/{{ record.id }}" target="_blank" class="btn" style="background: #9333ea; display: block;">معاينة الـ QR</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                {% else %}
+                    <tr>
+                        <td colspan="7" style="padding: 30px; color: #64748b;">لا توجد سجلات في هذا اليوم.</td>
+                    </tr>
+                {% endif %}
+            </tbody>
+        </table>
+
+        <a href="/doctor/archive/{{ modality }}/{{ month }}" class="btn-back">← العودة للأشهر</a>
+    </div>
+</body>
+</html>

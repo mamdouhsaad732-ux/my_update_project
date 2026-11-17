@@ -1,0 +1,241 @@
+--- baseline/main.py
++++ main.py
+@@ -7,6 +7,7 @@
+ from sqlalchemy import create_engine, Column, Integer, String, true
+ from sqlalchemy.orm import declarative_base, sessionmaker, Session
+ from fastapi.templating import Jinja2Templates
++from itsdangerous import BadData, URLSafeTimedSerializer
+ import os
+ import shutil
+ import datetime
+@@ -34,7 +35,10 @@
+ 
+ TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
+ LEGACY_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
+-PURGE_TRUTHY_VALUES = frozenset({"1", "true", "yes"})
++TRUTHY_VALUES = frozenset({"1", "true", "yes"})
++
++SESSION_SECRET = "medical-pacs-super-secret-production-key-2026"
++QR_TOKEN_SALT = "qr-v1"
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -56,6 +60,13 @@
+ 
+ _configure_logging()
+ 
++if not os.getenv("QR_SIGNING_SECRET"):
++    logger.warning(
++        "qr: QR_SIGNING_SECRET is unset — patient QR tokens are being signed with the "
++        "built-in session secret, which is published in this repository. Set "
++        "QR_SIGNING_SECRET before printing labels for real patients."
++    )
++
+ 
+ def created_at_default() -> str:
+     """Return a fresh timestamp for each insert.
+@@ -77,7 +88,64 @@
+ 
+ def purge_enabled() -> bool:
+     """Retention is opt-in: deleting patient data by accident is worse than not at all."""
+-    return os.getenv("PURGE_ENABLED", "").strip().lower() in PURGE_TRUTHY_VALUES
++    return os.getenv("PURGE_ENABLED", "").strip().lower() in TRUTHY_VALUES
++
++
++def qr_signing_secret() -> str:
++    """Signing key for patient QR tokens.
++
++    Read per call, so rotating the key takes effect without a restart. Until Ticket 04
++    lands, the fallback is the same literal the session cookie signs with — rotating one
++    rotates both, which mints new tokens and invalidates every printed label at once.
++    """
++    return os.getenv("QR_SIGNING_SECRET") or SESSION_SECRET
++
++
++def _qr_serializer() -> URLSafeTimedSerializer:
++    return URLSafeTimedSerializer(qr_signing_secret(), salt=QR_TOKEN_SALT)
++
++
++def mint_patient_token(record_id: int) -> str:
++    """A signed QR credential: unforgeable without the QR secret, but not opaque (ADR-0001)."""
++    return _qr_serializer().dumps(record_id)
++
++
++def read_patient_token(token: str) -> int:
++    """Verify a QR credential and return the record id it authorises.
++
++    Raises ``itsdangerous.BadData`` for a tampered, foreign-keyed or truncated token.
++    """
++    return int(_qr_serializer().loads(token, max_age=None))
++
++
++def patient_url(record_id: int, base_url: str) -> str:
++    """The canonical, unsigned-out patient link: the only place a QR target is built."""
++    return f"{base_url.rstrip('/')}/patient/{mint_patient_token(record_id)}"
++
++
++def write_qr(record_id: int, base_url: str) -> str:
++    """Mint the patient URL, render its QR into ``static/qrs``, return the filename.
++
++    The single writer for both call sites. ``fit=True`` sizes the grid to the payload,
++    which is longer than the numeric paths this replaced.
++    """
++    payload = patient_url(record_id, base_url)
++    qr = qrcode.QRCode(version=2, box_size=10, border=5)
++    qr.add_data(payload)
++    qr.make(fit=True)
++    image = qr.make_image(fill_color="black", back_color="white")
++
++    filename = f"qr_{record_id}.png"
++    path = os.path.join("static", "qrs", filename)
++    os.makedirs(os.path.dirname(path), exist_ok=True)
++    image.save(path)
++    return filename
++
++
++def legacy_patient_urls_enabled() -> bool:
++    """Labels printed before signed URLs existed keep working until the flag is retired."""
++    return os.getenv("LEGACY_PATIENT_URLS", "true").strip().lower() in TRUTHY_VALUES
++
+ 
+ class PatientRecord(Base):
+     __tablename__ = "patient_records"
+@@ -99,7 +167,7 @@
+ 
+ 
+ app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+-app.add_middleware(SessionMiddleware, secret_key="medical-pacs-super-secret-production-key-2026")
++app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
+ app.mount("/static", StaticFiles(directory="static"), name="static")
+ 
+ os.makedirs("static/uploads", exist_ok=True)
+@@ -577,24 +645,9 @@
+ </html>
+ """
+     return HTMLResponse(content=html_content)
+-def generate_patient_qr(record_id: int): 
+-    base_url = "http://127.0.0.1:8000" 
+-    scan_url = f"{base_url}/view-scan/{record_id}"
+-    qr = qrcode.QRCode(version=1, box_size=10, border=5)
+-    qr.add_data(scan_url)
+-    qr.make(fit=True)
+-
+-    img = qr.make_image(fill_color="black", back_color="white")
+-
+-    qr_filename = f"qr_{record_id}.png"
+-    save_path = os.path.join("static", "qrs", qr_filename)
+-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+-    img.save(save_path)
+-
+-    return qr_filename
+-
+ @app.post("/save-report-inline") 
+ def save_report_inline( 
++    request: Request,
+     record_id: int = Form(...), 
+     report: str = Form(...), 
+     db: Session = Depends(get_db) ): 
+@@ -607,7 +660,7 @@
+   db.commit()
+ 
+ # 3. توليد وتخزين رمز الـ QR الخاص بهذا السجل تلقائياً
+-  record.qr_code = generate_patient_qr(record.id)
++  record.qr_code = write_qr(record.id, str(request.base_url))
+   db.commit()
+ 
+ # 4. العودة إلى نفس صفحة المعاينة للمريض
+@@ -727,15 +780,7 @@
+         db.commit()
+         db.refresh(new_record)
+ 
+-        base_url = str(request.base_url).rstrip("/")
+-        qr_data = f"{base_url}/patient/{new_record.id}"
+-        
+-        qr_img = qrcode.make(qr_data)
+-        qr_filename = f"qr_{new_record.id}.png"
+-        qr_path = f"static/qrs/{qr_filename}"
+-        qr_img.save(qr_path)
+-
+-        new_record.qr_code = qr_filename
++        new_record.qr_code = write_qr(new_record.id, str(request.base_url))
+         db.commit()
+ 
+         return RedirectResponse(url="/technician?success=1", status_code=status.HTTP_303_SEE_OTHER)
+@@ -772,11 +817,54 @@
+         db.commit()
+         
+     return RedirectResponse(url="/technician", status_code=status.HTTP_303_SEE_OTHER)
+-@app.get("/patient/{record_id}", response_class=HTMLResponse)
+-def print_record(record_id: int, request: Request, db: Session = Depends(get_db)):
++
++
++def _patient_not_found() -> HTMLResponse:
++    return HTMLResponse(
++        content="<div style='font-family:Tahoma; text-align:center; margin-top:50px;'><h3>السجل غير موجود</h3></div>",
++        status_code=404,
++    )
++
++
++def legacy_record_id(identifier: str) -> int | None:
++    """The record id a pre-token URL names, or ``None`` if it names no usable id.
++
++    ``str.isdigit()`` is True for characters ``int()`` rejects (``"²"``) and for
++    strings past CPython's 4300-digit conversion limit, so the conversion itself
++    decides. Callers must treat an exception here as "not a legacy URL", never as 500.
++    """
++    if not identifier.isdigit():
++        return None
++    try:
++        return int(identifier)
++    except ValueError:
++        return None
++
++
++@app.get("/patient/{identifier}", response_class=HTMLResponse)
++def print_record(identifier: str, request: Request, db: Session = Depends(get_db)):
++    """Public patient page. The signed token in the URL *is* the credential."""
++    legacy_id = legacy_record_id(identifier)
++    if legacy_id is not None:
++        if not legacy_patient_urls_enabled():
++            return _patient_not_found()
++        # Evidence for retiring the flag: count how many printed labels still arrive this way.
++        logger.info("patient: legacy numeric URL used for record id=%s", legacy_id)
++        # Relative Location: an absolute one inherits the attacker-controllable Host header.
++        return RedirectResponse(
++            url=f"/patient/{mint_patient_token(legacy_id)}",
++            status_code=status.HTTP_303_SEE_OTHER,
++        )
++
++    try:
++        record_id = read_patient_token(identifier)
++    except (BadData, ValueError, TypeError):
++        # A 500 here would confirm the token parsed; refuse uniformly instead.
++        return _patient_not_found()
++
+     record = db.query(PatientRecord).filter(PatientRecord.id == record_id).first()
+     if record is None:
+-     return HTMLResponse(content="<div style='font-family:Tahoma; text-align:center; margin-top:50px;'><h3>السجل غير موجود</h3></div>", status_code=404)
++        return _patient_not_found()
+ # جلب مسارات الصور من حقل image_path مباشرة لضمان التطابق التام مع لوحة الأدمن
+     dicom_urls = []
+     if record.image_path:
+@@ -788,19 +876,3 @@
+       record=record, 
+       dicom_urls=dicom_urls
+ ))
+-def generate_patient_qr(record_id: int):
+-    # استبدل هذا الرابط برابط موقعك الفعلي على Render لضمان صحته دائماً 
+-   base_url = "https://al-pacs-system-1.onrender.com"
+-   scan_url = f"{base_url}/patient/{record_id}"
+-   qr = qrcode.QRCode(version=1, box_size=10, border=5)
+-   qr.add_data(scan_url)
+-   qr.make(fit=True)
+-
+-   img = qr.make_image(fill_color="black", back_color="white")
+-
+-   qr_filename = f"qr_{record_id}.png"
+-   save_path = os.path.join("static", "qrs", qr_filename)
+-   os.makedirs(os.path.dirname(save_path), exist_ok=True)
+-   img.save(save_path)
+-
+-   return qr_filename

@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>عارض DICOM الطبي - #{{ record.id }}</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root { --shell-max: 1400px; --viewer-h: min(78vh, 860px); --brand-blue: #0068a8; --brand-gold: #f8c000; }
+        * { box-sizing: border-box; }
+        html, body { height: 100%; }
+        body { font-family: Tahoma, sans-serif; background: radial-gradient(1100px 520px at 85% -12%, rgba(0, 104, 168, 0.18), transparent 60%), radial-gradient(900px 460px at 8% 112%, rgba(248, 192, 0, 0.05), transparent 58%), radial-gradient(1200px 600px at 50% -10%, #16243c 0%, #0b1220 55%, #080e1a 100%); color: #f8fafc; margin: 0; padding: 16px; text-align: center; }
+        .top-bar { display: flex; justify-content: space-between; align-items: center; max-width: var(--shell-max); margin: 0 auto 14px auto; gap: 10px; flex-wrap: wrap; }
+        .back-btn, .alt-btn { display: inline-flex; align-items: center; gap: 8px; color: white; padding: 10px 18px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.25); transition: filter 0.2s, transform 0.15s; }
+        .back-btn { background: #e74c3c; }
+        .alt-btn { background: #0284c7; }
+        .back-btn:hover, .alt-btn:hover { filter: brightness(1.12); transform: translateY(-1px); }
+        .header-card { background: linear-gradient(180deg, rgba(0, 104, 168, 0.14) 0%, rgba(30, 41, 59, 0.92) 32%, rgba(30, 41, 59, 0.92) 100%); max-width: var(--shell-max); margin: 0 auto 14px auto; padding: 14px 18px; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.35); text-align: right; border: 1px solid #243244; border-top: 2px solid rgba(248, 192, 0, 0.45); }
+        .header-card p { margin: 4px 0; font-size: 14px; color: #e2e8f0; }
+        .viewer-shell { max-width: var(--shell-max); margin: 0 auto; }
+        .viewer-container {
+            width: 100%;
+            height: var(--viewer-h);
+            margin: auto;
+            background: #000;
+            border-radius: 14px;
+            overflow: hidden;
+            position: relative;
+            border: 2px solid #334155;
+            box-shadow: 0 18px 50px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(255,255,255,0.03);
+        }
+        #dwv { width: 100%; height: 100%; }
+        .layerContainer, .imageLayer { width: 100%; height: 100%; }
+        .toolbar {
+            margin: 16px auto 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            background: rgba(30, 41, 59, 0.92);
+            border: 1px solid #243244;
+            border-radius: 12px;
+            padding: 12px 16px;
+            max-width: var(--shell-max);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+        }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
+            color: white;
+            border: 1px solid #1d4ed8;
+            padding: 11px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 14px;
+            font-family: Tahoma, sans-serif;
+            transition: filter 0.15s, transform 0.15s, box-shadow 0.15s;
+            box-shadow: 0 3px 10px rgba(37, 99, 235, 0.35);
+        }
+        .btn:hover { filter: brightness(1.15); transform: translateY(-1px); box-shadow: 0 5px 14px rgba(37, 99, 235, 0.45); }
+        .btn:active { transform: translateY(0); filter: brightness(0.95); }
+        .btn.tool-active { background: linear-gradient(180deg, #16a34a 0%, #15803d 100%); border-color: #166534; box-shadow: 0 3px 10px rgba(22, 163, 74, 0.4); }
+        .btn.btn-neutral { background: linear-gradient(180deg, #64748b 0%, #475569 100%); border-color: #334155; box-shadow: 0 3px 10px rgba(0,0,0,0.3); }
+        .status { max-width: var(--shell-max); margin: 14px auto 0; padding: 12px 14px; border-radius: 10px; background: rgba(30, 41, 59, 0.92); color: #e2e8f0; text-align: center; border: 1px solid #243244; font-size: 14px; }
+        .status.error { background: #7f1d1d; color: #fee2e2; border-color: #991b1b; }
+        .skip-warning { max-width: var(--shell-max); margin: 14px auto 0; padding: 12px 14px; border-radius: 10px; background: rgba(120, 53, 15, 0.92); color: #fef3c7; border: 1px solid #b45309; font-size: 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px; text-align: right; }
+        .skip-warning .skip-close { background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.3); color: #fef3c7; width: 30px; height: 30px; border-radius: 50%; cursor: pointer; font-size: 14px; flex: 0 0 auto; display: flex; align-items: center; justify-content: center; transition: filter 0.15s; }
+        .skip-warning .skip-close:hover { filter: brightness(1.3); }
+        .viewer-container { touch-action: pan-y; }
+        @media (max-width: 768px) {
+            body { padding: 10px; }
+            :root { --viewer-h: 62vh; }
+            .btn { padding: 10px 14px; font-size: 13px; flex: 1 1 auto; justify-content: center; }
+            .toolbar { gap: 8px; padding: 10px; }
+            .toolbar .btn { min-width: 46%; }
+        }
+        @media (max-width: 420px) {
+            .toolbar .btn { min-width: 100%; }
+        }
+        @media (min-width: 1200px) {
+            :root { --viewer-h: min(80vh, 900px); }
+        }
+    </style>
+</head>
+<body>
+    <div class="top-bar">
+        <a href="/doctor" class="back-btn"><i class="fas fa-arrow-right"></i> العودة للوحة التحكم</a>
+        <h3 style="margin: 0; color: #38bdf8;">عارض DICOM الطبي (الملف الأصلي)</h3>
+        <a href="/view-png/{{ record.id }}" class="alt-btn"><i class="fas fa-image"></i> معاينة PNG عالية الدقة</a>
+    </div>
+
+    <div class="header-card">
+        <p style="margin: 5px 0;"><strong>اسم المريض:</strong> {{ record.patient_name }}</p>
+        <p style="margin: 5px 0;"><strong>نوع الفحص (Modality):</strong> {{ record.modality or 'غير متوفر' }}</p>
+        <p style="margin: 5px 0;"><strong>تاريخ الميلاد:</strong> {{ record.birth_date or 'غير متوفر' }}</p>
+    </div>
+
+    <div class="viewer-shell">
+        <div class="viewer-container" id="dwv"></div>
+        {% if skipped_count|default(0) > 0 %}
+        <div id="skipWarning" class="skip-warning" role="alert">
+            <span><i class="fa-solid fa-triangle-exclamation"></i> تم تخطي {{ skipped_count }} ملفات غير متوافقة من العرض — يمكنك معاينتها عبر زر «معاينة PNG عالية الدقة».</span>
+            <button type="button" class="skip-close" id="dismissSkipWarning" aria-label="إخفاء التنبيه">✕</button>
+        </div>
+        {% endif %}
+        <div id="viewerStatus" class="status">جاري تهيئة عارض DICOM...</div>
+        <div class="toolbar" id="viewerToolbar">
+            <button class="btn" type="button" data-tool="Scroll" aria-pressed="false"><i class="fa-solid fa-layer-group"></i> تنقل الشرائح</button>
+            <button class="btn" type="button" data-tool="WindowLevel" aria-pressed="false"><i class="fa-solid fa-adjust"></i> السطوع والتباين</button>
+            <button class="btn" type="button" data-tool="ZoomAndPan" aria-pressed="false"><i class="fa-solid fa-magnifying-glass"></i> تكبير وتحريك</button>
+            <button class="btn btn-neutral" type="button" id="resetView"><i class="fa-solid fa-rotate-left"></i> إعادة ضبط</button>
+        </div>
+    </div>
+
+    <script id="dicom-data" type="application/json">
+        {{ dicom_urls | tojson | safe }}
+    </script>
+    <script src="/static/js/application.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dwv@0.33.1/dist/dwv.min.js"></script>
+    <script>
+        (function () {
+            var dicomDataEl = document.getElementById('dicom-data');
+            var dicomUrls = [];
+            try {
+                dicomUrls = dicomDataEl ? (JSON.parse(dicomDataEl.textContent) || []) : [];
+            } catch (e) {
+                console.error('Invalid DICOM data payload', e);
+                dicomUrls = [];
+            }
+            var statusEl = document.getElementById('viewerStatus');
+            var container = document.getElementById('dwv');
+            var viewerApp = null;
+
+            function setStatus(message, isError) {
+                if (!statusEl) return;
+                statusEl.textContent = message;
+                statusEl.className = 'status' + (isError ? ' error' : '');
+            }
+
+            function safeSetTool(toolName) {
+                if (!viewerApp || !toolName) return;
+                try {
+                    if (typeof viewerApp.setTool === 'function') {
+                        viewerApp.setTool(toolName);
+                    } else if (typeof viewerApp.setSelectedTool === 'function') {
+                        viewerApp.setSelectedTool(toolName);
+                    } else if (viewerApp.getToolboxController && viewerApp.getToolboxController()) {
+                        var ctrl = viewerApp.getToolboxController();
+                        if (ctrl && typeof ctrl.setSelectedTool === 'function') {
+                            ctrl.setSelectedTool(toolName);
+                        }
+                    }
+                } catch (e) {
+                    console.warn('Tool selection unavailable:', e);
+                }
+            }
+
+            /** Advance one slice in `direction` (+1 / -1) through DWV's supported APIs. */
+            function stepSlice(direction) {
+                if (!viewerApp || !direction) return;
+                try {
+                    if (viewerApp.getActiveDataView) {
+                        var view = viewerApp.getActiveDataView();
+                        if (view && view.incrementSlice) {
+                            view.incrementSlice(direction);
+                            return;
+                        }
+                    }
+                    if (typeof viewerApp.incrementSlice === 'function') {
+                        viewerApp.incrementSlice(direction);
+                    } else {
+                        console.warn('Slice stepping not supported by viewer API');
+                    }
+                } catch (e) {
+                    console.warn('Slice step unavailable:', e);
+                }
+            }
+
+            /** Throttled touch navigation: swipe up/down (or left/right) steps one slice at a time. */
+            function attachThrottledTouchNavigation() {
+                if (!window.MedicalPacsApp || typeof window.MedicalPacsApp.attachThrottledSliceNavigation !== 'function') {
+                    return;
+                }
+                var vertical = window.MedicalPacsApp.attachThrottledSliceNavigation(container, function (dir) {
+                    stepSlice(dir);
+                }, { intervalMs: 200, minSwipePx: 36, axis: 'y' });
+                var horizontal = window.MedicalPacsApp.attachThrottledSliceNavigation(container, function (dir) {
+                    stepSlice(dir);
+                }, { intervalMs: 200, minSwipePx: 36, axis: 'x' });
+                return { vertical: vertical, horizontal: horizontal };
+            }
+
+            function initViewer() {
+                if (!container) {
+                    setStatus('تعذر العثور على حاوية العارض.', true);
+                    return;
+                }
+                if (!dicomUrls || !dicomUrls.length) {
+                    setStatus('لا يوجد ملف DICOM أصلي لهذا السجل. يمكنك استخدام معاينة PNG عالية الدقة.', true);
+                    return;
+                }
+                if (typeof dwv === 'undefined' || !dwv.App) {
+                    setStatus('تعذر تحميل مكتبة عارض DICOM. تحقق من الاتصال ثم أعد المحاولة.', true);
+                    return;
+                }
+
+                try {
+                    viewerApp = new dwv.App();
+                    viewerApp.init({
+                        dataViewConfigs: { '*': [{ divId: 'dwv' }] },
+                        tools: {
+                            Scroll: {},
+                            WindowLevel: {},
+                            ZoomAndPan: {}
+                        }
+                    });
+
+                    viewerApp.addEventListener('load', function () {
+                        setStatus('تم تحميل ملف DICOM الأصلي بنجاح. اسحب للأعلى/الأسفل لتبديل الشرائح بثبات.', false);
+                        safeSetTool('Scroll');
+                        attachThrottledTouchNavigation();
+                    });
+                    viewerApp.addEventListener('error', function (event) {
+                        // DWV error events don't have a guaranteed shape across versions:
+                        // try to extract the offending file so the doctor knows what failed.
+                        var offending = null;
+                        try {
+                            var item = (event && typeof event.getItem === 'function') ? event.getItem() : null;
+                            if (item) {
+                                offending = (typeof item === 'string') ? item : (item.url || item.source || item.id || null);
+                            }
+                            if (!offending && event && event.data) {
+                                offending = event.data.url || event.data.source || event.data.id || null;
+                            }
+                        } catch (shapeError) { /* fall back to the generic message below */ }
+                        if (offending) {
+                            var fileName = String(offending).split('/').pop();
+                            console.warn('DWV reported a load error for file:', offending);
+                            setStatus('تعذر تحميل الملف: ' + fileName + '. قد لا تكتمل جميع الشرائح.', true);
+                        } else {
+                            console.error('DWV error', event);
+                            setStatus('حدث خطأ أثناء تحميل ملف DICOM. تأكد من سلامة الملف الأصلي.', true);
+                        }
+                    });
+
+                    viewerApp.loadURLs(dicomUrls);
+                } catch (e) {
+                    console.error('DWV init failed', e);
+                    setStatus('تعذر تهيئة عارض DICOM لهذا الملف.', true);
+                }
+            }
+
+            document.querySelectorAll('[data-tool]').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    var toolName = btn.getAttribute('data-tool');
+                    safeSetTool(toolName);
+                    // Visual active-state sync for the toolbar (accessible via aria-pressed).
+                    document.querySelectorAll('[data-tool]').forEach(function (other) {
+                        var isActive = other === btn;
+                        other.classList.toggle('tool-active', isActive);
+                        other.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+                    });
+                });
+            });
+            var resetBtn = document.getElementById('resetView');
+            if (resetBtn) {
+                resetBtn.addEventListener('click', function () {
+                    if (!viewerApp) return;
+                    try {
+                        if (typeof viewerApp.resetDisplay === 'function') viewerApp.resetDisplay();
+                        else if (typeof viewerApp.reset === 'function') viewerApp.reset();
+                        else if (typeof viewerApp.resetLayout === 'function') viewerApp.resetLayout();
+                    } catch (e) { console.warn('Reset unavailable:', e); }
+                });
+            }
+
+            // Dismiss the "skipped incompatible files" notice on request.
+            var skipWarning = document.getElementById('skipWarning');
+            if (skipWarning) {
+                var dismissBtn = document.getElementById('dismissSkipWarning');
+                if (dismissBtn) {
+                    dismissBtn.addEventListener('click', function () { skipWarning.remove(); });
+                }
+            }
+
+            if (window.MedicalPacsApp && typeof window.MedicalPacsApp.safeInit === 'function') {
+                window.MedicalPacsApp.safeInit(initViewer);
+            } else if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', initViewer);
+            } else {
+                initViewer();
+            }
+        })();
+    </script>
+</body>
+</html>

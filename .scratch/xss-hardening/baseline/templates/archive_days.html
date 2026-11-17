@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <title>أرشيف الأيام - {{ month }}</title>
+    <style>
+        body { font-family: Tahoma, sans-serif; background: #f8fafc; margin: 0; padding: 40px; color: #1e293b; }
+        .container { max-width: 800px; background: white; margin: auto; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); border: 1px solid #e2e8f0; text-align: center; }
+        h2 { color: #1e3a8a; margin-bottom: 25px; }
+        .list { display: flex; flex-direction: column; gap: 12px; margin-bottom: 30px; }
+        .item { background: #f8fafc; border: 1px solid #cbd5e1; padding: 15px; border-radius: 6px; text-decoration: none; color: #16a34a; font-weight: bold; font-size: 16px; transition: 0.2s; display: block; }
+        .item:hover { background: #16a34a; color: white; }
+        .btn-back { background: #64748b; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-weight: bold; font-size: 14px; display: inline-block; }
+        .no-data { color: #64748b; padding: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>أرشيف الأيام لشهر: {{ month }} ({{ modality }})</h2>
+        
+        <div class="list">
+            {% if days %}
+                {% for day in days %}
+                    <a href="/doctor/archive/{{ modality }}/{{ month }}/{{ day }}" class="item">📆 يوم: {{ day }}</a>
+                {% endfor %}
+            {% else %}
+                <div class="no-data">لا توجد سجلات في هذا الشهر.</div>
+            {% endif %}
+        </div>
+
+        <a href="/doctor/archive/{{ modality }}" class="btn-back">← العودة للشهور</a>
+    </div>
+</body>
+</html>

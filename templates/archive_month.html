@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <title>أرشيف الشهور - {{ modality }}</title>
+    <style>
+        :root { --brand-blue: #0068a8; --brand-gold: #f8c000; }
+        body { font-family: Tahoma, sans-serif; background: radial-gradient(1000px 500px at 85% -10%, rgba(0, 104, 168, 0.08), transparent 62%), radial-gradient(820px 420px at -6% 108%, rgba(248, 192, 0, 0.05), transparent 58%), #f8fafc; margin: 0; padding: 40px; color: #1e293b; }
+        .container { max-width: 800px; background: linear-gradient(180deg, rgba(0, 104, 168, 0.035) 0%, #ffffff 24%, #ffffff 100%); margin: auto; padding: 30px; border-radius: 12px; border: 1px solid #d9e5ef; border-top: 3px solid var(--brand-blue); box-shadow: 0 6px 24px rgba(0, 104, 168, 0.09); text-align: center; }
+        h2 { color: #1e3a8a; margin-bottom: 25px; }
+        .list { display: flex; flex-direction: column; gap: 12px; margin-bottom: 30px; }
+        .item { background: #f8fafc; border: 1px solid #cbd5e1; padding: 15px; border-radius: 6px; text-decoration: none; color: #2563eb; font-weight: bold; font-size: 16px; transition: 0.2s; display: block; }
+        .item:hover { background: #2563eb; color: white; }
+        .btn-back { background: #64748b; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-weight: bold; font-size: 14px; display: inline-block; }
+        .no-data { color: #64748b; padding: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>أرشيف الشهور لجهاز: {{ modality }}</h2>
+        
+        <div class="list">
+            {% if months %}
+                {% for month in months %}
+                    <a href="/doctor/archive/{{ modality }}/{{ month }}" class="item">📅 شهر: {{ month }}</a>
+                {% endfor %}
+            {% else %}
+                <div class="no-data">لا توجد سجلات مسجلة لهذا الجهاز حتى الآن.</div>
+            {% endif %}
+        </div>
+
+        <a href="/doctor/archive" class="btn-back">← العودة لاختيار الأجهزة</a>
+    </div>
+</body>
+</html>

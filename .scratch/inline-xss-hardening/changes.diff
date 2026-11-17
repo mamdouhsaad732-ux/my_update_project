@@ -1,0 +1,254 @@
+--- baseline/main.py
++++ main.py
+@@ -10,6 +10,7 @@
+ from itsdangerous import BadData, URLSafeTimedSerializer
+ import hashlib
+ import hmac
++import html
+ import logging
+ import os
+ import secrets
+@@ -517,23 +518,33 @@
+         records = db.query(PatientRecord).all()
+         mod_records = [r for r in records if r.modality and r.modality.strip().lower() == modality.strip().lower()]
+         day_records = [r for r in mod_records if r.created_at and str(r.created_at).startswith(day)]
+-        
++
++        safe_modality = html.escape(modality, quote=True)
++        safe_month = html.escape(month, quote=True)
++        safe_day = html.escape(day, quote=True)
++        archive_next = html.escape(f"/doctor/archive/{modality}/{month}/{day}", quote=True)
++
+         rows_html = ""
+         if day_records:
+             for record in day_records:
+-                qr_element = f'<img src="/static/qrs/{record.qr_code}" class="qr-img" alt="QR">' if record.qr_code and record.qr_code != "temp.png" else '<span>-</span>'
++                safe_qr = html.escape(record.qr_code or "", quote=True)
++                qr_element = (
++                    f'<img src="/static/qrs/{safe_qr}" class="qr-img" alt="QR">'
++                    if record.qr_code and record.qr_code != "temp.png"
++                    else '<span>-</span>'
++                )
+                 rows_html += f"""
+                 <tr>
+                     <td><b>#{record.id}</b></td>
+-                    <td>{record.patient_name}</td>
+-                    <td>{record.birth_date}</td>
++                    <td>{html.escape(record.patient_name or "", quote=True)}</td>
++                    <td>{html.escape(record.birth_date or "", quote=True)}</td>
+                     <td><a href="/doctor/view-images/{record.id}" class="btn" style="background: #0284c7;">عرض وفحص الصور</a></td>
+                     <td>{qr_element}</td>
+                     <td>
+                         <form action="/save-report" method="post" onsubmit="return confirm('هل أنت متأكد من حفظ التقرير الطبي؟');">
+                             <input type="hidden" name="record_id" value="{record.id}">
+-                            <input type="hidden" name="next" value="/doctor/archive/{modality}/{month}/{day}">
+-                            <textarea name="report">{record.report}</textarea>
++                            <input type="hidden" name="next" value="{archive_next}">
++                            <textarea name="report">{html.escape(record.report or "", quote=True)}</textarea>
+                             <br><button type="submit" class="btn-save" style="margin-top: 5px;">حفظ التقرير</button>
+                         </form>
+                     </td>
+@@ -552,7 +563,7 @@
+ <html lang="ar" dir="rtl">
+ <head>
+     <meta charset="UTF-8">
+-    <title>سجلات تاريخ: {day}</title>
++    <title>سجلات تاريخ: {safe_day}</title>
+     <style>
+         body {{ font-family: Tahoma, sans-serif; background: #f8fafc; margin: 0; padding: 30px; color: #1e293b; }}
+         .container {{ max-width: 1250px; background: white; margin: auto; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.04); border: 1px solid #e2e8f0; }}
+@@ -570,7 +581,7 @@
+ </head>
+ <body>
+     <div class="container">
+-        <div class="header"><h2>سجلات الفحوصات ليوم: {day} ({modality})</h2></div>
++        <div class="header"><h2>سجلات الفحوصات ليوم: {safe_day} ({safe_modality})</h2></div>
+         <table>
+             <thead>
+                 <tr>
+@@ -585,7 +596,7 @@
+             </thead>
+             <tbody>{rows_html}</tbody>
+         </table>
+-        <a href="/doctor/archive/{modality}/{month}" class="btn-back">← العودة للأشهر</a>
++        <a href="/doctor/archive/{safe_modality}/{safe_month}" class="btn-back">← العودة للأشهر</a>
+     </div>
+ </body>
+ </html>"""
+@@ -640,11 +651,18 @@
+         raise HTTPException(status_code=404, detail="السجل غير موجود في النظام")
+     
+     # 3. بناء واجهة HTML المتكاملة (معاينة + تعديل التقرير وحفظه في نفس الصفحة)
++    safe_name = html.escape(record.patient_name or "", quote=True)
++    safe_birth = html.escape(record.birth_date or "-", quote=True)
++    safe_modality = html.escape(record.modality or "-", quote=True)
++    safe_qr = html.escape(record.qr_code or "", quote=True)
++    safe_report = html.escape(record.report or "", quote=True)
++    safe_next = html.escape(f"/secretary/qr-preview/{record.id}", quote=True)
++
+     html_content = f"""<!DOCTYPE html>
+ <html lang="ar" dir="rtl">
+ <head>
+     <meta charset="UTF-8">
+-    <title>معاينة وتعديل التقرير - {record.patient_name}</title>
++    <title>معاينة وتعديل التقرير - {safe_name}</title>
+     <style>
+         body {{ font-family: Tahoma, sans-serif; background: #f8fafc; padding: 30px; color: #1e293b; }}
+         .card {{ max-width: 750px; background: white; margin: auto; padding: 30px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); text-align: center; }}
+@@ -669,23 +687,23 @@
+         <hr style="border:0; border-top:1px solid #e2e8f0; margin: 15px 0;">
+         
+         <div style="text-align: right; margin-bottom: 15px; font-size: 15px;">
+-            <p><strong>اسم المريض:</strong> {record.patient_name}</p>
+-            <p><strong>تاريخ الميلاد:</strong> {record.birth_date or '-'}</p>
+-            <p><strong>نوع الفحص (Modality):</strong> {record.modality or '-'}</p>
++            <p><strong>اسم المريض:</strong> {safe_name}</p>
++            <p><strong>تاريخ الميلاد:</strong> {safe_birth}</p>
++            <p><strong>نوع الفحص (Modality):</strong> {safe_modality}</p>
+         </div>
+         
+         <div>
+-            <img src="/static/qrs/{record.qr_code}" class="qr-img" alt="QR Code">
++            <img src="/static/qrs/{safe_qr}" class="qr-img" alt="QR Code">
+             <p class="print-hide" style="font-size: 13px; color: #64748b;">رمز الاستجابة السريعة الخاص بالفحص</p>
+         </div>
+ 
+         <!-- نموذج تعديل وحفظ التقرير مباشرة -->
+         <form action="/save-report" method="POST">
+             <input type="hidden" name="record_id" value="{record.id}">
+-            <input type="hidden" name="next" value="/secretary/qr-preview/{record.id}">
++            <input type="hidden" name="next" value="{safe_next}">
+             <div class="report-box">
+                 <h4 style="margin-top: 0; color: #1e3a8a; text-align: right;">التقرير التشخيصي والملاحظات:</h4>
+-                <textarea name="report">{record.report or ""}</textarea>
++                <textarea name="report">{safe_report}</textarea>
+             </div>
+ 
+             <div style="margin-top: 25px;">
+--- /dev/null
++++ tests/test_inline_xss.py
+@@ -0,0 +1,124 @@
++"""Ticket 06 — XSS hardening for inline f-string HTML routes.
++
++Contract (spec: `.scratch/inline-xss-hardening/spec.md`): routes that build HTML via
++f-strings must escape stored/user-controlled values before interpolation.
++"""
++
++import main
++from conftest import insert_record
++
++
++XSS_NAME = '<script>alert("name")</script>'
++XSS_REPORT = "<img src=x onerror=alert(1)>"
++XSS_ATTR_BREAK = '2000-01-01"><script>alert(1)</script>'
++ESCAPED_SCRIPT_LT = "&lt;script&gt;"
++ESCAPED_IMG = "&lt;img"
++
++
++def _archive_day_path(modality: str, created_at: str) -> str:
++    day = created_at[:10]
++    month = created_at[:7]
++    return f"/doctor/archive/{modality}/{month}/{day}"
++
++
++# --- doctor archive day (inline f-string HTML) ------------------------------------
++
++
++def test_archive_records_escapes_patient_name(admin_client):
++    created_at = "2026-11-15 10:00:00.000000"
++    insert_record(name=XSS_NAME, modality="CT", created_at=created_at)
++
++    body = admin_client.get(_archive_day_path("CT", created_at)).text
++
++    assert XSS_NAME not in body, "raw script tag rendered in archive records"
++    assert ESCAPED_SCRIPT_LT in body
++
++
++def test_archive_records_escapes_report(admin_client):
++    created_at = "2026-11-15 11:00:00.000000"
++    insert_record(report=XSS_REPORT, modality="CT", created_at=created_at)
++
++    body = admin_client.get(_archive_day_path("CT", created_at)).text
++
++    assert XSS_REPORT not in body, "raw HTML payload rendered in archive report"
++    assert ESCAPED_IMG in body
++
++
++def test_archive_records_renders_normal_data(admin_client):
++    created_at = "2026-11-15 12:00:00.000000"
++    name = "مريض الأرشيف"
++    report = "تقرير أرشيف عادي"
++    insert_record(name=name, report=report, modality="CT", created_at=created_at)
++
++    body = admin_client.get(_archive_day_path("CT", created_at)).text
++
++    assert name in body
++    assert report in body
++
++
++# --- secretary QR preview (inline f-string HTML) ---------------------------------
++
++
++def test_secretary_qr_preview_escapes_patient_name(secretary_client):
++    record_id = insert_record(name=XSS_NAME)
++
++    body = secretary_client.get(f"/secretary/qr-preview/{record_id}").text
++
++    assert XSS_NAME not in body, "raw script tag rendered in QR preview"
++    assert ESCAPED_SCRIPT_LT in body
++
++
++def test_secretary_qr_preview_escapes_report(secretary_client):
++    record_id = insert_record(report=XSS_REPORT)
++
++    body = secretary_client.get(f"/secretary/qr-preview/{record_id}").text
++
++    assert XSS_REPORT not in body, "raw HTML payload rendered in QR preview report"
++    assert ESCAPED_IMG in body
++
++
++def test_secretary_qr_preview_escapes_birth_date(secretary_client):
++    record_id = insert_record(birth_date=XSS_ATTR_BREAK)
++
++    body = secretary_client.get(f"/secretary/qr-preview/{record_id}").text
++
++    assert XSS_ATTR_BREAK not in body, "raw payload rendered in QR preview birth date"
++    assert ESCAPED_SCRIPT_LT in body
++
++
++def test_secretary_qr_preview_escapes_modality(secretary_client):
++    record_id = insert_record(modality=XSS_ATTR_BREAK)
++
++    body = secretary_client.get(f"/secretary/qr-preview/{record_id}").text
++
++    assert XSS_ATTR_BREAK not in body, "raw payload rendered in QR preview modality"
++    assert ESCAPED_SCRIPT_LT in body
++
++
++def test_secretary_qr_preview_renders_normal_data(secretary_client):
++    name = "مريض المعاينة"
++    report = "تقرير معاينة عادي"
++    record_id = insert_record(name=name, report=report)
++
++    body = secretary_client.get(f"/secretary/qr-preview/{record_id}").text
++
++    assert name in body
++    assert report in body
++
++
++# --- download endpoint must remain functional (non-HTML) -------------------------
++
++
++def test_download_report_still_returns_content(admin_client):
++    name = "مريض التحميل"
++    report = "نص التقرير"
++    record_id = insert_record(name=name, report=report, modality="MRI")
++
++    response = admin_client.get(f"/download-report/{record_id}")
++
++    assert response.status_code == 200
++    # Contract: downloadable report content still contains the stored data.
++    text = response.text
++    assert name in text
++    assert report in text
++    assert str(record_id) in text

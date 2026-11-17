@@ -1,0 +1,181 @@
+--- baseline/main.py
++++ working/main.py
+@@ -16,12 +16,68 @@
+ import pydicom
+ import numpy as np
+ import io
+-
+-
+-SQLALCHEMY_DATABASE_URL = "sqlite:///./medical_pacs.db"
+-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
++import logging
++
++
++DEFAULT_DATABASE_URL = "sqlite:///./medical_pacs.db"
++SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL)
++
++# `check_same_thread` is a SQLite-only connect argument. The DATABASE_URL seam accepts any
++# scheme, and create_engine() raises TypeError on a connect arg the dialect doesn't know.
++CONNECT_ARGS = (
++    {"check_same_thread": False} if SQLALCHEMY_DATABASE_URL.startswith("sqlite") else {}
++)
++
++engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args=CONNECT_ARGS)
+ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+ Base = declarative_base()
++
++TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
++LEGACY_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
++PURGE_TRUTHY_VALUES = frozenset({"1", "true", "yes"})
++
++logger = logging.getLogger(__name__)
++
++
++def _configure_logging() -> None:
++    """Make this module's INFO output visible when the host app configured nothing.
++
++    uvicorn configures its own loggers and leaves the root logger without handlers, so a
++    library logger's INFO records are dropped in deployment while still being captured by
++    pytest's caplog. Install a root handler only when there isn't one, so a host app's
++    logging configuration (and caplog) always wins.
++    """
++    if not logging.getLogger().handlers:
++        logging.basicConfig(
++            level=logging.INFO,
++            format="%(asctime)s %(levelname)s %(name)s: %(message)s",
++        )
++
++
++_configure_logging()
++
++
++def created_at_default() -> str:
++    """Return a fresh timestamp for each insert.
++
++    Always a ``str`` in ``TIMESTAMP_FORMAT``: the column is ``String``, ``parse_timestamp``
++    inverts it, and the archive pages slice ``created_at[:10]``. ``str(datetime)`` would
++    silently drop the microseconds whenever they are zero, breaking that guarantee.
++    """
++    return datetime.datetime.now().strftime(TIMESTAMP_FORMAT)
++
++
++def parse_timestamp(value: str) -> datetime.datetime:
++    """Inverse of ``created_at_default``, tolerant of older rows written without microseconds."""
++    try:
++        return datetime.datetime.strptime(value, TIMESTAMP_FORMAT)
++    except ValueError:
++        return datetime.datetime.strptime(value, LEGACY_TIMESTAMP_FORMAT)
++
++
++def purge_enabled() -> bool:
++    """Retention is opt-in: deleting patient data by accident is worse than not at all."""
++    return os.getenv("PURGE_ENABLED", "").strip().lower() in PURGE_TRUTHY_VALUES
+ 
+ class PatientRecord(Base):
+     __tablename__ = "patient_records"
+@@ -33,7 +89,7 @@
+     image_path = Column(String)
+     report = Column(String, default="بانتظار كتابة التقرير الطبي من السكرتارية...")
+     qr_code = Column(String)
+-    created_at = Column(String, default=str(datetime.datetime.now()))
++    created_at = Column(String, default=created_at_default)
+     dicom_file=Column(String,nullable=true)
+ 
+ Base.metadata.create_all(bind=engine)
+@@ -72,30 +128,56 @@
+     finally:
+         db.close()
+ 
+-def cleanup_old_records(db: Session):
++def cleanup_old_records(db: Session) -> int:
++    """Delete records older than 30 days, returning how many were purged.
++
++    Destructive by nature, so callers must gate it on ``purge_enabled()``. Records are
++    logged only after the commit succeeds: a rolled-back delete is not a deletion.
++    """
++    purged = []
+     try:
+         threshold_date = datetime.datetime.now() - datetime.timedelta(days=30)
+-        records = db.query(PatientRecord).all()
+-        for record in records:
+-            if record.created_at:
+-                try:
+-                    record_date = datetime.datetime.strptime(record.created_at.split(".")[0], "%Y-%m-%d %H:%M:%S")
+-                    if record_date < threshold_date:
+-                        if record.image_path:
+-                            for p in record.image_path.split(","):
+-                                img_file = p.strip().lstrip("/")
+-                                if os.path.exists(img_file):
+-                                    os.remove(img_file)
+-                        if record.qr_code and record.qr_code != "temp.png":
+-                            qr_file = f"static/qrs/{record.qr_code}"
+-                            if os.path.exists(qr_file):
+-                                os.remove(qr_file)
+-                        db.delete(record)
+-                except Exception:
+-                    pass
++        for record in db.query(PatientRecord).all():
++            if not record.created_at:
++                continue
++            try:
++                record_date = parse_timestamp(record.created_at)
++            except (TypeError, ValueError):
++                logger.warning(
++                    "retention: skipping record id=%s with unparseable created_at=%r",
++                    record.id,
++                    record.created_at,
++                )
++                continue
++            if record_date >= threshold_date:
++                continue
++            try:
++                record_id, record_created_at = record.id, record.created_at
++                if record.image_path:
++                    for p in record.image_path.split(","):
++                        img_file = p.strip().lstrip("/")
++                        if os.path.exists(img_file):
++                            os.remove(img_file)
++                if record.qr_code and record.qr_code != "temp.png":
++                    qr_file = f"static/qrs/{record.qr_code}"
++                    if os.path.exists(qr_file):
++                        os.remove(qr_file)
++                db.delete(record)
++                purged.append((record_id, record_created_at))
++            except Exception:
++                # Filesystem failure on one record must not abort the sweep, but it must
++                # not be silent either: the record stays and the next sweep retries.
++                logger.warning("retention: could not purge record id=%s", record.id, exc_info=True)
+         db.commit()
+     except Exception:
+-        pass
++        db.rollback()
++        logger.exception("retention: sweep failed; no records were purged")
++        return 0
++    for record_id, record_created_at in purged:
++        logger.info("retention: purged record id=%s created_at=%s", record_id, record_created_at)
++    if purged:
++        logger.info("retention: sweep removed %d record(s) older than 30 days", len(purged))
++    return len(purged)
+ 
+ @app.get("/", response_class=HTMLResponse)
+ def read_root(request: Request):
+@@ -162,7 +244,8 @@
+ def doctor_dashboard(request: Request, db: Session = Depends(get_db)):
+     if "user" not in request.session or request.session["user"]["role"] != "admin":
+         return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+-    cleanup_old_records(db)
++    if purge_enabled():
++        cleanup_old_records(db)
+     records = db.query(PatientRecord).all()
+     template = env.get_template("doctor.html")
+     return HTMLResponse(content=template.render(request=request, records=records, user=request.session["user"]))
+--- baseline/requirements.txt
++++ working/requirements.txt
+@@ -4,4 +4,7 @@
+ jinja2
+ qrcode
+ python-multipart
+-itsdangerous+itsdangerous
++pydicom
++Pillow
++numpy

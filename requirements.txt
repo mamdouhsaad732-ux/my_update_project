@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+sqlalchemy
+jinja2
+qrcode
+python-multipart
+itsdangerous
+pydicom
+Pillow
+numpy
+psycopg2-binary
