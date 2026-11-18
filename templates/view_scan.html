@@ -194,6 +194,33 @@
                 return { vertical: vertical, horizontal: horizontal };
             }
 
+            /** Throttled mouse-wheel navigation: one slice per notch burst, page scroll unaffected. */
+            function attachWheelNavigation() {
+                var lastStep = 0;
+                container.addEventListener('wheel', function (event) {
+                    event.preventDefault();
+                    var stamp = Date.now ? Date.now() : new Date().getTime();
+                    if (stamp - lastStep < 160) return;
+                    lastStep = stamp;
+                    var delta = typeof event.deltaY === 'number' ? event.deltaY : -event.wheelDelta;
+                    stepSlice(delta > 0 ? 1 : -1);
+                }, { passive: false });
+            }
+
+            /** Arrow-key slice navigation, active only while the pointer rests over the viewer. */
+            function attachKeyboardNavigation() {
+                document.addEventListener('keydown', function (event) {
+                    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+                    var tag = ((event.target && event.target.tagName) || '').toLowerCase();
+                    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+                    var rect = container.getBoundingClientRect();
+                    if (event.clientX < rect.left || event.clientX > rect.right ||
+                        event.clientY < rect.top || event.clientY > rect.bottom) return;
+                    event.preventDefault();
+                    stepSlice(event.key === 'ArrowRight' ? 1 : -1);
+                });
+            }
+
             function initViewer() {
                 if (!container) {
                     setStatus('تعذر العثور على حاوية العارض.', true);
@@ -220,9 +247,11 @@
                     });
 
                     viewerApp.addEventListener('load', function () {
-                        setStatus('تم تحميل ملف DICOM الأصلي بنجاح. اسحب للأعلى/الأسفل لتبديل الشرائح بثبات.', false);
+                        setStatus('تم تحميل ملف DICOM الأصلي بنجاح. اسحب للأعلى/الأسفل أو استخدم عجلة الفأرة لتبديل الشرائح بثبات.', false);
                         safeSetTool('Scroll');
                         attachThrottledTouchNavigation();
+                        attachWheelNavigation();
+                        attachKeyboardNavigation();
                     });
                     viewerApp.addEventListener('error', function (event) {
                         // DWV error events don't have a guaranteed shape across versions:

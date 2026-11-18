@@ -11,6 +11,7 @@ from itsdangerous import BadData, URLSafeTimedSerializer
 import hashlib
 import hmac
 import html
+import asyncio
 import logging
 import os
 import secrets
@@ -280,14 +281,14 @@ def get_db():
         db.close()
 
 def cleanup_old_records(db: Session) -> int:
-    """Delete records older than 30 days, returning how many were purged.
+    """Delete records older than RETENTION_DAYS (default 30), returning how many were purged.
 
     Destructive by nature, so callers must gate it on ``purge_enabled()``. Records are
     logged only after the commit succeeds: a rolled-back delete is not a deletion.
     """
     purged = []
     try:
-        threshold_date = datetime.datetime.now() - datetime.timedelta(days=30)
+        threshold_date = datetime.datetime.now() - datetime.timedelta(days=RETENTION_DAYS)
         for record in db.query(PatientRecord).all():
             if not record.created_at:
                 continue
@@ -304,15 +305,7 @@ def cleanup_old_records(db: Session) -> int:
                 continue
             try:
                 record_id, record_created_at = record.id, record.created_at
-                if record.image_path:
-                    for p in record.image_path.split(","):
-                        img_file = _upload_fs_path(p)
-                        if img_file and os.path.exists(img_file):
-                            os.remove(img_file)
-                if record.qr_code and record.qr_code != "temp.png":
-                    qr_file = _qr_fs_path(record.qr_code)
-                    if qr_file and os.path.exists(qr_file):
-                        os.remove(qr_file)
+                _delete_record_assets(record)
                 db.delete(record)
                 purged.append((record_id, record_created_at))
             except Exception:
@@ -327,8 +320,42 @@ def cleanup_old_records(db: Session) -> int:
     for record_id, record_created_at in purged:
         logger.info("retention: purged record id=%s created_at=%s", record_id, record_created_at)
     if purged:
-        logger.info("retention: sweep removed %d record(s) older than 30 days", len(purged))
+        logger.info("retention: sweep removed %d record(s) older than %d days", len(purged), RETENTION_DAYS)
     return len(purged)
+
+
+# Retention window in days (the sweep itself checks daily; the age does the real gating).
+RETENTION_DAYS = int(os.getenv("RETENTION_DAYS", "30") or "30") or 30
+RETENTION_SWEEP_INTERVAL_SECONDS = 24 * 60 * 60
+
+
+async def _retention_sweep_loop() -> None:
+    """Background sweep: hard-delete records older than RETENTION_DAYS, checked daily.
+
+    Gated on ``purge_enabled()`` exactly like the on-visit sweep — automated deletion of
+    patient data stays opt-in. The first check runs at startup, so a restart catches up on
+    missed sweeps without waiting a full day.
+    """
+    while True:
+        if purge_enabled():
+            db = SessionLocal()
+            try:
+                cleanup_old_records(db)
+            finally:
+                db.close()
+        await asyncio.sleep(RETENTION_SWEEP_INTERVAL_SECONDS)
+
+
+@app.on_event("startup")
+async def start_retention_sweep() -> None:
+    app.state.retention_task = asyncio.create_task(_retention_sweep_loop())
+
+
+@app.on_event("shutdown")
+async def stop_retention_sweep() -> None:
+    task = getattr(app.state, "retention_task", None)
+    if task is not None:
+        task.cancel()
 
 
 def _resolve_protected_static_path(base_dir: str, file_path: str) -> Path | None:
@@ -363,6 +390,69 @@ def _upload_fs_path(stored_entry: str) -> str | None:
 def _qr_fs_path(qr_code: str) -> str | None:
     name = (qr_code or "").strip().replace("\\", "/").split("/")[-1]
     return os.path.join(QRS_DIR, name) if name else None
+
+
+def _remove_if_inside(root_dir: str, fs_path: str) -> bool:
+    """Delete ``fs_path`` only when it resolves inside ``root_dir``; report success.
+
+    Stored DB values reach ``os.remove`` through user uploads, so containment is checked
+    at the filesystem boundary: a stored ``../`` path must never delete outside the root.
+    """
+    try:
+        resolved = Path(fs_path).resolve()
+        root = Path(root_dir).resolve()
+    except (OSError, ValueError):
+        return False
+    if root != resolved and root not in resolved.parents:
+        logger.warning("files: refused to delete %r — outside root %r", fs_path, root_dir)
+        return False
+    if resolved.is_file():
+        try:
+            resolved.unlink()
+            return True
+        except OSError:
+            logger.warning("files: could not delete %r", resolved, exc_info=True)
+    return False
+
+
+def _delete_record_assets(record: PatientRecord) -> int:
+    """Hard-delete every server file belonging to a record; return how many were removed.
+
+    ``image_path`` holds preview PNGs (plus, for legacy uploads, the original when preview
+    generation failed); ``dicom_file`` holds the original DICOM stack. Both must go, or a
+    "permanent delete" leaves PHI sitting on disk. QR ``temp.png`` placeholders never exist
+    on disk and are skipped.
+    """
+    entries = []
+    if record.image_path:
+        entries.extend(p.strip() for p in record.image_path.split(",") if p.strip())
+    if record.dicom_file:
+        entries.extend(p.strip() for p in record.dicom_file.split(",") if p.strip())
+
+    removed = 0
+    for entry in entries:
+        fs_path = _upload_fs_path(entry)
+        if fs_path and _remove_if_inside(UPLOADS_DIR, fs_path):
+            removed += 1
+
+    if record.qr_code and record.qr_code != "temp.png":
+        qr_path = _qr_fs_path(record.qr_code)
+        if qr_path and _remove_if_inside(QRS_DIR, qr_path):
+            removed += 1
+
+    if removed:
+        logger.info("files: removed %d asset file(s) for record id=%s", removed, record.id)
+    return removed
+
+
+# Raster extensions a browser <img> can actually render; used to keep `.dcm` fallback
+# entries (stored when preview generation failed) out of image galleries.
+_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"})
+
+
+def _is_raster_image_entry(entry: str) -> bool:
+    name = (entry or "").strip().replace("\\", "/").split("/")[-1]
+    return os.path.splitext(name)[1].lower() in _IMAGE_EXTENSIONS
 
 
 # DWV-compatible fingerprint fields: slices must agree on all of these to share one stack
@@ -608,6 +698,8 @@ def view_png_preview(record_id: int, request: Request, db: Session = Depends(get
     image_urls = []
     if record.image_path:
         image_urls = [p.strip() for p in record.image_path.split(",") if p.strip()]
+    # عرض الصور القابلة للعرض فقط: مدخلات .dcm الاحتياطية تظهر كصور مكسورة في المعرض
+    image_urls = [p for p in image_urls if _is_raster_image_entry(p)]
     # إبقِ فقط الملفات الموجودة فعلياً لتجنب روابط صور مكسورة
     image_urls = [
         p for p in image_urls
@@ -638,18 +730,11 @@ def doctor_delete_record(record_id: int, request: Request, db: Session = Depends
     
     record = db.query(PatientRecord).filter(PatientRecord.id == record_id).first()
     if record:
-        if record.image_path:
-            for p in record.image_path.split(","):
-                img_file = _upload_fs_path(p)
-                if img_file and os.path.exists(img_file):
-                    os.remove(img_file)
-        if record.qr_code and record.qr_code != "temp.png":
-            qr_file = _qr_fs_path(record.qr_code)
-            if qr_file and os.path.exists(qr_file):
-                os.remove(qr_file)
-        
+        # حذف تام: المعاينات + ملفات DICOM الأصلية + QR من القرص، ثم الصف من قاعدة البيانات.
+        _delete_record_assets(record)
         db.delete(record)
         db.commit()
+        logger.info("delete: admin permanently removed record id=%s", record_id)
         
     return RedirectResponse(url="/doctor", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -883,22 +968,12 @@ def technician_delete_record(record_id: int, request: Request, db: Session = Dep
     # البحث المباشر عن السجل برقم الـ ID وحذفه من الجدول المركزي المشترك
     record = db.query(PatientRecord).filter(PatientRecord.id == record_id).first()
     if record:
-        # حذف الصور المادية من السيرفر
-        if record.image_path:
-            for p in record.image_path.split(","):
-                img_file = _upload_fs_path(p)
-                if img_file and os.path.exists(img_file):
-                    os.remove(img_file)
-        
-        # حذف ملف الـ QR المادي
-        if record.qr_code and record.qr_code != "temp.png":
-            qr_file = _qr_fs_path(record.qr_code)
-            if qr_file and os.path.exists(qr_file):
-                os.remove(qr_file)
-        
-        # الحذف النهائي من قاعدة البيانات (يزول من السكرتارية والأدمن والأرشيف فوراً)
+        # حذف تام: المعاينات + ملفات DICOM الأصلية + QR من السيرفر، ثم الصف من قاعدة البيانات
+        # (يزول من السكرتارية والأدمن والأرشيف فوراً ولا يبقى أي أثر للصور على القرص)
+        _delete_record_assets(record)
         db.delete(record)
         db.commit()
+        logger.info("delete: technician permanently removed record id=%s", record_id)
         
     return RedirectResponse(url="/technician", status_code=status.HTTP_303_SEE_OTHER)
 @app.get("/secretary/qr-preview/{record_id}", response_class=HTMLResponse)
@@ -1192,6 +1267,8 @@ def print_record(identifier: str, request: Request, db: Session = Depends(get_db
     dicom_urls = []
     if record.image_path:
       dicom_urls = [p.strip() for p in record.image_path.split(",") if p.strip()]
+    # عرض الصور القابلة للعرض فقط: مدخلات .dcm الاحتياطية تظهر كصور مكسورة عند المريض
+    dicom_urls = [p for p in dicom_urls if _is_raster_image_entry(p)]
 
     # The page itself is authorized by the signed token in the URL; embedded assets need it too.
     patient_token = identifier

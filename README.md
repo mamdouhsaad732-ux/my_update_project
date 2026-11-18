@@ -56,7 +56,8 @@ Implemented and test-verified controls include:
 | `STORAGE_DIR` | *(unset)* | Base directory for persistent assets. When set (and explicit overrides not provided), resolves to `UPLOADS_DIR=$STORAGE_DIR/uploads`, `QRS_DIR=$STORAGE_DIR/qrs`. Recommended for Render Disk mounts (e.g. `/var/data`). |
 | `UPLOADS_DIR` | `static/uploads` (or `$STORAGE_DIR/uploads`) | Filesystem path for uploaded/converted scan files. **URL/DB values remain** `/static/uploads/...`. Takes precedence over `STORAGE_DIR` derivation. |
 | `QRS_DIR` | `static/qrs` (or `$STORAGE_DIR/qrs`) | Filesystem path for generated QR PNGs. **URL/DB values remain** `/static/qrs/...`. Takes precedence over `STORAGE_DIR` derivation. |
-| `PURGE_ENABLED` | off | Opt-in retention purge (records older than 30 days). Truthy: `1`, `true`, `yes` (case-insensitive). Destructive; enable deliberately per retention policy. |
+| `PURGE_ENABLED` | off | Opt-in retention purge (records older than `RETENTION_DAYS`, default 30): hard-deletes the DB row plus every server file (previews, original DICOMs, QRs). A background sweep checks daily at startup and every 24h while enabled; the admin dashboard also sweeps on visit. Truthy: `1`, `true`, `yes` (case-insensitive). Destructive; enable deliberately per retention policy. |
+| `RETENTION_DAYS` | `30` | Age (in days) beyond which records become eligible for the retention purge. |
 | `LEGACY_PATIENT_URLS` | on (`true`) | When enabled, numeric `/patient/<id>` requests are logged and redirected (303) to the signed patient URL for backward compatibility with previously printed labels. Disable only after migration evidence. |
 | `PORT` | *(platform-provided)* | Bind port for Uvicorn/Procfile on Render (`0.0.0.0:$PORT`). Do not hardcode in production platforms that inject it. |
 

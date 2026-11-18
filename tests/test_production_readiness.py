@@ -5,11 +5,13 @@ surfaces. The `/health` probe is specified by the ticket; it may be absent
 until implemented.
 """
 
+import asyncio
+import datetime
 import json
 import os
 
 import main
-from conftest import REPO_ROOT, run_in_isolated_cwd
+from conftest import REPO_ROOT, get_record, insert_record, run_in_isolated_cwd
 
 
 # --- health probe -----------------------------------------------------------------
@@ -338,3 +340,134 @@ def test_view_scan_template_warns_on_skipped_files():
         # Check for the banner markup itself, not the string (the JS references the id).
         assert '<div id="skipWarning"' not in silent, \
             f"warning banner must be absent for skipped_count={skipped!r}"
+
+
+# --- hard delete: DB row + every server file (previews, DICOM originals, QR) -------
+
+def _write_asset(path: str, content: bytes = b"PHI-BYTES") -> str:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as handle:
+        handle.write(content)
+    return path
+
+
+def _insert_record_with_qr(**overrides) -> int:
+    """Insert a record, then give it a real (non-placeholder) QR filename."""
+    record_id = insert_record(**overrides)
+    session = main.SessionLocal()
+    try:
+        record = session.query(main.PatientRecord).filter(main.PatientRecord.id == record_id).first()
+        record.qr_code = f"qr_{record_id}.png"
+        session.commit()
+    finally:
+        session.close()
+    return record_id
+
+
+def test_admin_delete_is_hard_delete_including_dicom_originals(admin_client, clean_static):
+    preview = _write_asset(os.path.join(main.UPLOADS_DIR, "rec_preview.png"))
+    original = _write_asset(os.path.join(main.UPLOADS_DIR, "rec_stack.dcm"), b"DICM\x00ORIGINAL")
+    record_id = _insert_record_with_qr(
+        image_path="/static/uploads/rec_preview.png",
+        dicom_file="/static/uploads/rec_stack.dcm",
+    )
+    qr = _write_asset(os.path.join(main.QRS_DIR, f"qr_{record_id}.png"))
+
+    response = admin_client.post(f"/doctor/delete/{record_id}", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert get_record(record_id) is None, "record row must be hard-deleted from the database"
+    for path in (preview, original, qr):
+        assert not os.path.exists(path), f"{path} must be gone from the server"
+
+
+def test_technician_delete_is_hard_delete_including_dicom_originals(technician_client, clean_static):
+    preview = _write_asset(os.path.join(main.UPLOADS_DIR, "tech_preview.png"))
+    original = _write_asset(os.path.join(main.UPLOADS_DIR, "tech_stack.dcm"), b"DICM\x00ORIGINAL")
+    record_id = _insert_record_with_qr(
+        image_path="/static/uploads/tech_preview.png",
+        dicom_file="/static/uploads/tech_stack.dcm",
+    )
+    qr = _write_asset(os.path.join(main.QRS_DIR, f"qr_{record_id}.png"))
+
+    response = technician_client.post(f"/technician/delete/{record_id}", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert get_record(record_id) is None, "record row must be hard-deleted from the database"
+    for path in (preview, original, qr):
+        assert not os.path.exists(path), f"{path} must be gone from the server"
+
+
+def test_delete_refuses_paths_outside_storage_roots(admin_client, clean_static):
+    """A stored `../` path must never delete files outside the uploads/QR roots."""
+    canary_dir = os.path.join(main.UPLOADS_DIR, "..", "escape-test")
+    canary = _write_asset(os.path.join(canary_dir, "canary.txt"))
+    record_id = insert_record(image_path="/static/uploads/../escape-test/canary.txt")
+
+    admin_client.post(f"/doctor/delete/{record_id}")
+
+    assert os.path.exists(canary), "file outside the storage root must not be deleted"
+    os.remove(canary)
+    os.rmdir(canary_dir)
+
+
+def test_cleanup_old_records_removes_dicom_originals(clean_static):
+    preview = _write_asset(os.path.join(main.UPLOADS_DIR, "old_preview.png"))
+    original = _write_asset(os.path.join(main.UPLOADS_DIR, "old_stack.dcm"), b"DICM\x00OLD")
+    old_stamp = (datetime.datetime.now() - datetime.timedelta(days=40)).strftime(main.TIMESTAMP_FORMAT)
+    record_id = insert_record(
+        created_at=old_stamp,
+        image_path="/static/uploads/old_preview.png",
+        dicom_file="/static/uploads/old_stack.dcm",
+    )
+
+    purged = main.cleanup_old_records(main.SessionLocal())
+
+    assert purged == 1
+    assert get_record(record_id) is None
+    assert not os.path.exists(preview)
+    assert not os.path.exists(original)
+
+
+# --- 30-day retention: background sweep configuration ------------------------------
+
+
+def test_retention_window_and_background_sweep_configured():
+    assert main.RETENTION_DAYS == 30
+    assert main.RETENTION_SWEEP_INTERVAL_SECONDS == 24 * 60 * 60
+    import inspect
+    assert inspect.iscoroutinefunction(main._retention_sweep_loop)
+    # Retention stays opt-in: the background sweep must respect the same gate as the
+    # on-visit sweep (asserted separately by test_purge_enabled_default_off_and_opt_in).
+
+
+def test_retention_days_env_configurable():
+    result = run_in_isolated_cwd(
+        "import os\n"
+        "os.environ['RETENTION_DAYS'] = '90'\n"
+        "import main\n"
+        "print(main.RETENTION_DAYS)\n"
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().splitlines()[-1] == "90"
+
+
+# --- galleries never render non-image entries as broken <img> ----------------------
+
+
+def test_galleries_hide_non_image_entries(admin_client, clean_static):
+    _write_asset(os.path.join(main.UPLOADS_DIR, "ok_preview.png"))
+    _write_asset(os.path.join(main.UPLOADS_DIR, "ok_stack.dcm"), b"DICM\x00DATA")
+    record_id = insert_record(
+        image_path="/static/uploads/ok_preview.png,/static/uploads/ok_stack.dcm",
+        dicom_file="/static/uploads/ok_stack.dcm",
+    )
+
+    png_page = admin_client.get(f"/view-png/{record_id}").text
+    assert "/static/uploads/ok_preview.png" in png_page
+    assert "ok_stack.dcm" not in png_page, "a .dcm fallback entry must not render as <img>"
+
+    token = main.mint_patient_token(record_id)
+    patient_page = admin_client.get(f"/patient/{token}").text
+    assert "/static/uploads/ok_preview.png?patient_token=" in patient_page
+    assert "ok_stack.dcm" not in patient_page, "a .dcm fallback entry must not render as <img>"
