@@ -2,98 +2,173 @@
 <html lang="ar" dir="rtl">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>لوحة تحكم الفني - {{ user.name }}</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        :root { --brand-blue: #0068a8; --brand-gold: #f8c000; }
-        body { font-family: Tahoma, sans-serif; background: radial-gradient(1100px 520px at 88% -12%, rgba(0, 104, 168, 0.08), transparent 62%), radial-gradient(900px 460px at -6% 108%, rgba(248, 192, 0, 0.05), transparent 58%), #f8fafc; margin: 0; padding: 30px; color: #1e293b; }
-        .container { max-width: 1000px; background: linear-gradient(180deg, rgba(0, 104, 168, 0.035) 0%, #ffffff 24%, #ffffff 100%); margin: auto; padding: 30px; border-radius: 12px; border: 1px solid #d9e5ef; border-top: 3px solid var(--brand-blue); box-shadow: 0 6px 24px rgba(0, 104, 168, 0.09); }
-        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #1e3a8a; padding-bottom: 15px; margin-bottom: 25px; }
-        .header h2 { color: #1e3a8a; margin: 0; font-size: 22px; }
-        .logout-btn { background: #dc2626; color: white; padding: 8px 16px; border-radius: 6px; text-decoration: none; font-weight: bold; font-size: 14px; }
-        .upload-box { background: #f1f5f9; padding: 20px; border-radius: 8px; border: 1px solid #cbd5e1; margin-bottom: 30px; }
-        .upload-box h3 { margin-top: 0; color: #1e3a8a; font-size: 18px; }
-        .form-group { margin-bottom: 15px; }
-        label { display: block; margin-bottom: 5px; font-weight: bold; font-size: 14px; }
-        input[type="text"], input[type="date"], input[type="file"] { width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box; font-family: Tahoma; }
-        .btn-submit { background: #16a34a; color: white; border: none; padding: 12px 20px; border-radius: 6px; font-weight: bold; font-size: 15px; cursor: pointer; width: 100%; }
-        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-        th, td { border: 1px solid #e2e8f0; padding: 10px; text-align: center; font-size: 13px; }
-        th { background: #1e3a8a; color: white; }
-        tr:nth-child(even) { background: #f8fafc; }
-        .btn-delete { background: #dc2626; color: white; border: none; padding: 6px 12px; border-radius: 4px; font-weight: bold; cursor: pointer; font-size: 12px; }
-        .success-msg { background: #dcfce7; color: #166534; padding: 12px; border-radius: 6px; margin-bottom: 20px; font-weight: bold; text-align: center; }
+        :root {
+            --brand-blue: #0068a8;
+            --brand-blue-dark: #004f80;
+            --brand-gold: #f8c000;
+            --ink: #0f172a;
+            --text: #1e293b;
+            --muted: #64748b;
+            --surface: #ffffff;
+            --surface-2: #f8fafc;
+            --line: #e2e8f0;
+            --line-strong: #cbd5e1;
+            --danger: #dc2626;
+            --ok: #16a34a;
+        }
+        * { box-sizing: border-box; }
+        body { font-family: Tahoma, "Segoe UI", sans-serif; background: radial-gradient(1100px 520px at 88% -12%, rgba(0, 104, 168, 0.08), transparent 62%), radial-gradient(900px 460px at -6% 108%, rgba(248, 192, 0, 0.05), transparent 58%), #f1f5f9; margin: 0; padding: 24px; color: var(--text); }
+        .container { max-width: 1100px; margin: auto; }
+
+        /* ===== الترويسة العلوية (شريط التطبيق) ===== */
+        .appbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; padding: 18px 22px; border-radius: 14px; margin-bottom: 18px; color: #fff; background: linear-gradient(135deg, #0b3a5d 0%, #0068a8 72%, #0b7cc4 100%); border: 1px solid rgba(255,255,255,0.12); box-shadow: 0 10px 30px rgba(0, 104, 168, 0.25); position: relative; overflow: hidden; }
+        .appbar::after { content: ""; position: absolute; inset-inline-start: 0; bottom: 0; width: 100%; height: 3px; background: linear-gradient(90deg, var(--brand-gold) 0%, rgba(248,192,0,0.15) 60%, transparent 100%); }
+        .appbar-brand { display: flex; align-items: center; gap: 14px; }
+        .brand-mark { width: 46px; height: 46px; border-radius: 12px; background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.25); display: flex; align-items: center; justify-content: center; font-size: 20px; }
+        .appbar h1 { margin: 0; font-size: 18px; }
+        .appbar .subtitle { margin: 3px 0 0; font-size: 12.5px; color: rgba(255,255,255,0.78); }
+        .btn-logout { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 16px; border-radius: 8px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.35); color: #fff; text-decoration: none; font-weight: bold; font-size: 13px; transition: background 0.15s; }
+        .btn-logout:hover { background: rgba(220, 38, 38, 0.85); border-color: transparent; }
+
+        /* ===== أزرار موحدة ===== */
+        .btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: 36px; padding: 0 14px; border-radius: 8px; font-weight: bold; font-size: 13px; font-family: inherit; text-decoration: none; border: 1px solid transparent; cursor: pointer; transition: background 0.15s, border-color 0.15s, transform 0.12s, box-shadow 0.15s; }
+        .btn:active { transform: translateY(1px); }
+        .btn-success { background: var(--ok); color: #fff; }
+        .btn-success:hover { background: #15803d; box-shadow: 0 4px 12px rgba(22, 163, 74, 0.3); }
+        .btn-danger-quiet { background: #fff; color: var(--danger); border-color: #fca5a5; }
+        .btn-danger-quiet:hover { background: #fef2f2; border-color: var(--danger); }
+
+        /* ===== بطاقات الصفحة ===== */
+        .page-card { background: var(--surface); border: 1px solid #d9e5ef; border-radius: 14px; box-shadow: 0 6px 24px rgba(0, 104, 168, 0.07); padding: 22px; margin-bottom: 18px; }
+        .section-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin: 0 0 14px; }
+        .section-head h2 { margin: 0; font-size: 17px; color: var(--brand-blue-dark); display: flex; align-items: center; gap: 10px; }
+        .section-head h2 i { color: var(--brand-blue); }
+        .pill { background: #e6f2fa; color: #075e8f; border: 1px solid #b9d9ee; border-radius: 999px; padding: 4px 12px; font-size: 12.5px; font-weight: bold; }
+        .hint { margin: 0 0 14px; color: var(--muted); font-size: 12.5px; display: flex; align-items: center; gap: 8px; }
+
+        /* ===== نموذج الرفع ===== */
+        .upload-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 18px; }
+        .form-group { display: flex; flex-direction: column; gap: 6px; }
+        .form-group.full { grid-column: 1 / -1; }
+        label { font-weight: bold; font-size: 13px; color: #334155; }
+        input[type="text"], input[type="date"], input[type="file"] { width: 100%; padding: 11px 12px; border: 1px solid var(--line-strong); border-radius: 8px; font-family: inherit; font-size: 13.5px; background: var(--surface-2); transition: border-color 0.15s, box-shadow 0.15s; }
+        input[type="text"]:focus, input[type="date"]:focus, input[type="file"]:focus { outline: none; border-color: var(--brand-blue); box-shadow: 0 0 0 3px rgba(0, 104, 168, 0.15); background: #fff; }
+        .btn-submit { width: 100%; height: 44px; font-size: 14.5px; margin-top: 4px; }
+
+        /* ===== الجدول ===== */
+        .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+        table { width: 100%; border-collapse: collapse; min-width: 760px; }
+        th, td { padding: 14px 16px; text-align: center; font-size: 13px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+        thead th { background: var(--surface-2); color: #334155; font-size: 12.5px; border-bottom: 2px solid var(--brand-blue); white-space: nowrap; }
+        tbody tr:hover { background: #f4f9fd; }
+        tbody tr:last-child td { border-bottom: none; }
+        .record-id { font-weight: bold; color: var(--brand-blue-dark); white-space: nowrap; }
+        .patient-name { font-weight: bold; color: var(--ink); }
+        .cell-muted { color: var(--muted); }
+        .empty-row { padding: 36px 20px !important; color: var(--muted); font-size: 14px; }
+
+        /* رسالة النجاح */
+        .success-msg { display: flex; align-items: center; gap: 10px; background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; border-inline-start: 4px solid var(--ok); padding: 13px 16px; border-radius: 10px; margin-bottom: 18px; font-weight: bold; font-size: 14px; }
+
+        @media (max-width: 720px) {
+            body { padding: 12px; }
+            .page-card { padding: 14px; }
+            .appbar { padding: 14px 16px; }
+            .upload-grid { grid-template-columns: 1fr; }
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="header">
-            <h2>لوحة تحكم الفني: {{ user.name }} (جهاز: {{ user.modality }})</h2>
-            <a href="/logout" class="logout-btn">تسجيل الخروج</a>
-        </div>
+        <!-- شريط التطبيق: الهوية + الجهاز + الخروج في مكان استراتيجي -->
+        <header class="appbar">
+            <div class="appbar-brand">
+                <span class="brand-mark"><i class="fa-solid fa-x-ray"></i></span>
+                <div>
+                    <h1>لوحة تحكم الفني: {{ user.name }}</h1>
+                    <p class="subtitle">جهاز: {{ user.modality }} — رفع الفحوصات وتوليد رموز الـ QR</p>
+                </div>
+            </div>
+            <a href="/logout" class="btn-logout"><i class="fa-solid fa-arrow-left-from-bracket"></i> تسجيل الخروج</a>
+        </header>
 
         {% if success %}
-        <div class="success-msg">تمت عملية رفع الفحص وتوليد رمز الـ QR بنجاح تام!</div>
+        <div class="success-msg"><i class="fa-solid fa-circle-check"></i> تمت عملية رفع الفحص وتوليد رمز الـ QR بنجاح تام!</div>
         {% endif %}
 
-        <div class="upload-box">
-            <h3>رفع فحص جديد (يدعم اختيار عدة صور أو لقطات متحركة دفعة واحدة بالضغط على Ctrl)</h3>
-            <!-- رسالة تأكيد قبل إتمام الرفع -->
+        <!-- بطاقة رفع فحص جديد -->
+        <div class="page-card">
+            <div class="section-head">
+                <h2><i class="fa-solid fa-cloud-arrow-up"></i> رفع فحص جديد</h2>
+            </div>
+            <p class="hint"><i class="fa-solid fa-circle-info"></i> يدعم اختيار عدة صور أو لقطات متحركة دفعة واحدة بالضغط على Ctrl، ويُولَّد رمز QR تلقائياً بعد الرفع.</p>
             <form action="/technician/upload" method="post" enctype="multipart/form-data" onsubmit="return confirm('هل أنت متأكد من رغبتك في رفع الفحص وتوليد رمز QR المخصص؟');">
-                <div class="form-group">
-                    <label>اسم المريض:</label>
-                    <input type="text" name="patient_name" placeholder="أدخل اسم المريض الثلاثي" required>
+                <div class="upload-grid">
+                    <div class="form-group">
+                        <label>اسم المريض</label>
+                        <input type="text" name="patient_name" placeholder="أدخل اسم المريض الثلاثي" required>
+                    </div>
+                    <div class="form-group">
+                        <label>تاريخ الولادة</label>
+                        <input type="date" name="birth_date" required>
+                    </div>
+                    <div class="form-group full">
+                        <label>ملفات الفحص (صور / لقطات متحركة GIF / ملفات DICOM)</label>
+                        <input type="file" name="files" multiple required>
+                    </div>
+                    <div class="form-group full">
+                        <button type="submit" class="btn btn-success btn-submit"><i class="fa-solid fa-upload"></i> رفع الفحص وتوليد رمز QR الفوري</button>
+                    </div>
                 </div>
-                
-                <div class="form-group">
-                    <label>تاريخ الولادة:</label>
-                    <input type="date" name="birth_date" required>
-                </div>
-
                 <input type="hidden" name="modality" value="{{ user.modality }}">
-
-                <div class="form-group">
-                    <label>ملفات الفحص (صور / لقطات متحركة GIF):</label>
-                    <!-- تفعيل الـ multiple -->
-                    <input type="file" name="files" multiple required>
-                </div>
-
-                <button type="submit" class="btn-submit">رفع الفحص وتوليد رمز QR الفوري</button>
             </form>
         </div>
 
-        <h3>سجل فحوصاتك المرفوعة (إمكانية الحذف في حال الخطأ)</h3>
-        <table>
-            <thead>
-                <tr>
-                    <th>رقم السجل</th>
-                    <th>اسم المريض</th>
-                    <th>تاريخ الولادة</th>
-                    <th>تاريخ ووقت الرفع</th>
-                    <th>الإجراء</th>
-                    </tr>
-            </thead>
-            <tbody>
-                {% if records %}
-                    {% for record in records %}
-                    <tr>
-                        <td><b>#{{ record.id }}</b></td>
-                        <td>{{ record.patient_name }}</td>
-                        <td>{{ record.birth_date }}</td>
-                        <td>{{ record.created_at }}</td>
-                        <td>
-                            <form action="/technician/delete/{{ record.id }}" method="post" onsubmit="return confirm('هل أنت متأكد من حذف هذا الفحص بالخطأ؟');">
-                                <button type="submit" class="btn-delete">حذف السجل</button>
-                            </form>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                {% else %}
-                    <tr>
-                        <td colspan="5" style="padding: 20px; color: #64748b;">لم تقم برفع أي فحوصات حتى الآن.</td>
-                    </tr>
-                {% endif %}
-            </tbody>
-        </table>
+        <!-- بطاقة سجل الفحوصات -->
+        <div class="page-card">
+            <div class="section-head">
+                <h2><i class="fa-solid fa-table-list"></i> سجل فحوصاتك المرفوعة</h2>
+                <span class="pill">{{ records|length }} فحصاً</span>
+            </div>
+            <p class="hint"><i class="fa-solid fa-shield-halved"></i> الحذف نهائي وتتم إزالة جميع الملفات من الخادم — استخدمه فقط في حال الرفع الخاطئ.</p>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>رقم السجل</th>
+                            <th>اسم المريض</th>
+                            <th>تاريخ الولادة</th>
+                            <th>تاريخ ووقت الرفع</th>
+                            <th>الإجراء</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% if records %}
+                            {% for record in records %}
+                            <tr>
+                                <td><span class="record-id">#{{ record.id }}</span></td>
+                                <td><span class="patient-name">{{ record.patient_name }}</span></td>
+                                <td class="cell-muted">{{ record.birth_date }}</td>
+                                <td class="cell-muted">{{ record.created_at }}</td>
+                                <td>
+                                    <form action="/technician/delete/{{ record.id }}" method="post" onsubmit="return confirm('تحذير: سيتم حذف هذا الفحص وجميع ملفاته من الخادم نهائياً. هل أنت متأكد؟');">
+                                        <button type="submit" class="btn btn-danger-quiet"><i class="fa-regular fa-trash-can"></i> حذف نهائي</button>
+                                    </form>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        {% else %}
+                            <tr><td colspan="5" class="empty-row">لم تقم برفع أي فحوصات حتى الآن.</td></tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </div>
+    <script src="/static/js/application.js"></script>
 </body>
 </html>
