@@ -6,7 +6,7 @@
     <title>عارض DICOM الطبي - #{{ record.id }}</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        :root { --shell-max: 1400px; --viewer-h: min(78vh, 860px); --brand-blue: #0068a8; --brand-gold: #f8c000; }
+        :root { --shell-max: 1600px; --viewer-h: min(84vh, 920px); --brand-blue: #0068a8; --brand-gold: #f8c000; }
         * { box-sizing: border-box; }
         html, body { height: 100%; }
         body { font-family: Tahoma, sans-serif; background: radial-gradient(1100px 520px at 85% -12%, rgba(0, 104, 168, 0.18), transparent 60%), radial-gradient(900px 460px at 8% 112%, rgba(248, 192, 0, 0.05), transparent 58%), radial-gradient(1200px 600px at 50% -10%, #16243c 0%, #0b1220 55%, #080e1a 100%); color: #f8fafc; margin: 0; padding: 16px; text-align: center; }
@@ -21,6 +21,7 @@
         .viewer-container {
             width: 100%;
             height: var(--viewer-h);
+            min-height: 380px;
             margin: auto;
             background: #000;
             border-radius: 14px;
@@ -29,8 +30,17 @@
             border: 2px solid #334155;
             box-shadow: 0 18px 50px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(255,255,255,0.03);
         }
-        #dwv { width: 100%; height: 100%; }
+        #dwv { width: 100%; height: 100%; position: relative; }
         .layerContainer, .imageLayer { width: 100%; height: 100%; }
+        .layerContainer canvas { display: block; }
+
+        /* مبدّل سلاسل الفحص (Series switcher) */
+        .series-switcher { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; max-width: var(--shell-max); margin: 0 auto 12px; padding: 10px 14px; background: rgba(30, 41, 59, 0.92); border: 1px solid #243244; border-radius: 12px; text-align: right; }
+        .series-title { font-size: 13px; color: #94a3b8; display: inline-flex; align-items: center; gap: 7px; }
+        .series-btn { display: inline-flex; align-items: center; gap: 7px; padding: 8px 14px; border-radius: 8px; background: #1e293b; border: 1px solid #334155; color: #cbd5e1; font-size: 13px; font-weight: bold; text-decoration: none; transition: background 0.15s, border-color 0.15s, color 0.15s; }
+        .series-btn:hover { background: #243244; color: #fff; }
+        .series-btn.active { background: linear-gradient(180deg, #16a34a 0%, #15803d 100%); border-color: #166534; color: #fff; box-shadow: 0 3px 10px rgba(22, 163, 74, 0.35); }
+        .series-count { background: rgba(0, 0, 0, 0.28); border-radius: 999px; padding: 1px 8px; font-size: 11.5px; }
         .toolbar {
             margin: 16px auto 0;
             display: flex;
@@ -73,16 +83,19 @@
         .viewer-container { touch-action: pan-y; }
         @media (max-width: 768px) {
             body { padding: 10px; }
-            :root { --viewer-h: 62vh; }
+            :root { --viewer-h: 64vh; }
+            .viewer-container { min-height: 300px; }
             .btn { padding: 10px 14px; font-size: 13px; flex: 1 1 auto; justify-content: center; }
             .toolbar { gap: 8px; padding: 10px; }
             .toolbar .btn { min-width: 46%; }
+            .series-switcher { gap: 6px; padding: 8px 10px; }
+            .series-btn { padding: 7px 11px; font-size: 12px; }
         }
         @media (max-width: 420px) {
             .toolbar .btn { min-width: 100%; }
         }
         @media (min-width: 1200px) {
-            :root { --viewer-h: min(80vh, 900px); }
+            :root { --viewer-h: min(86vh, 980px); }
         }
     </style>
 </head>
@@ -98,6 +111,21 @@
         <p style="margin: 5px 0;"><strong>نوع الفحص (Modality):</strong> {{ record.modality or 'غير متوفر' }}</p>
         <p style="margin: 5px 0;"><strong>تاريخ الميلاد:</strong> {{ record.birth_date or 'غير متوفر' }}</p>
     </div>
+
+    {% if dicom_series is defined and dicom_series|length > 1 %}
+    <div class="series-switcher" role="tablist" aria-label="تبديل بين سلاسل الفحص">
+        <span class="series-title"><i class="fa-solid fa-layer-group"></i> سلاسل الفحص:</span>
+        {% for item in dicom_series %}
+        <a class="series-btn {% if loop.index0 == active_series|default(0) %}active{% endif %}"
+           href="?series={{ loop.index0 }}"
+           role="tab"
+           {% if loop.index0 == active_series|default(0) %}aria-selected="true" aria-current="true"{% else %}aria-selected="false"{% endif %}>
+            {{ item.label }}
+            <span class="series-count">{{ item.count }}</span>
+        </a>
+        {% endfor %}
+    </div>
+    {% endif %}
 
     <div class="viewer-shell">
         <div class="viewer-container" id="dwv"></div>
@@ -117,20 +145,23 @@
     </div>
 
     <script id="dicom-data" type="application/json">
-        {{ dicom_urls | tojson | safe }}
+        {"active": {{ active_series|default(0) }}, "urls": {{ dicom_urls|tojson }}}
     </script>
     <script src="/static/js/application.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dwv@0.33.1/dist/dwv.min.js"></script>
     <script>
         (function () {
             var dicomDataEl = document.getElementById('dicom-data');
-            var dicomUrls = [];
+            var payload = {};
             try {
-                dicomUrls = dicomDataEl ? (JSON.parse(dicomDataEl.textContent) || []) : [];
+                payload = dicomDataEl ? (JSON.parse(dicomDataEl.textContent) || {}) : {};
             } catch (e) {
-                console.error('Invalid DICOM data payload', e);
-                dicomUrls = [];
+                console.warn('Invalid DICOM data payload', e);
+                payload = {};
             }
+            var dicomUrls = Array.isArray(payload)
+                ? payload
+                : (Array.isArray(payload.urls) ? payload.urls : []);
             var statusEl = document.getElementById('viewerStatus');
             var container = document.getElementById('dwv');
             var viewerApp = null;
@@ -246,13 +277,21 @@
                         }
                     });
 
-                    viewerApp.addEventListener('load', function () {
-                        setStatus('تم تحميل ملف DICOM الأصلي بنجاح. اسحب للأعلى/الأسفل أو استخدم عجلة الفأرة لتبديل الشرائح بثبات.', false);
+                    viewerApp.addEventListener('load', function (event) {
+                        var sliceCount = null;
+                        try {
+                            sliceCount = event && event.data && event.data.length ? event.data.length : null;
+                        } catch (countError) { /* count is cosmetic only */ }
+                        var message = sliceCount
+                            ? ('تم تحميل ' + sliceCount + ' شريحة DICOM بنجاح. اسحب أو استخدم عجلة الفأرة لتبديل الشرائح بثبات.')
+                            : 'تم تحميل ملف DICOM الأصلي بنجاح. اسحب للأعلى/الأسفل أو استخدم عجلة الفأرة لتبديل الشرائح بثبات.';
+                        setStatus(message, false);
                         safeSetTool('Scroll');
                         attachThrottledTouchNavigation();
                         attachWheelNavigation();
                         attachKeyboardNavigation();
                     });
+                    var reportedFileErrors = Object.create(null);
                     viewerApp.addEventListener('error', function (event) {
                         // DWV error events don't have a guaranteed shape across versions:
                         // try to extract the offending file so the doctor knows what failed.
@@ -266,13 +305,16 @@
                                 offending = event.data.url || event.data.source || event.data.id || null;
                             }
                         } catch (shapeError) { /* fall back to the generic message below */ }
-                        if (offending) {
-                            var fileName = String(offending).split('/').pop();
-                            console.warn('DWV reported a load error for file:', offending);
-                            setStatus('تعذر تحميل الملف: ' + fileName + '. قد لا تكتمل جميع الشرائح.', true);
+                        var fileName = offending ? String(offending).split('/').pop() : null;
+                        // Never flood the console: each offending file is reported once per load.
+                        if (fileName && reportedFileErrors[fileName]) return;
+                        if (fileName) reportedFileErrors[fileName] = true;
+                        if (fileName) {
+                            console.warn('DWV: skipped unsupported/incompatible file:', fileName);
+                            setStatus('تم تخطي ملف غير مدعوم (' + fileName + '). باقي الشرائح تعمل بشكل طبيعي.', true);
                         } else {
-                            console.error('DWV error', event);
-                            setStatus('حدث خطأ أثناء تحميل ملف DICOM. تأكد من سلامة الملف الأصلي.', true);
+                            console.warn('DWV error (handled without breaking the viewer)', event);
+                            setStatus('حدث خطأ في جزء من الملفات وتم تجاوزه. الشرائح السليمة تعمل.', true);
                         }
                     });
 

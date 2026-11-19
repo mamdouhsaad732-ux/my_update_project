@@ -246,7 +246,7 @@ def test_procfile_runs_uvicorn_app():
 
 
 def _write_test_dicom(name, *, orientation=(1, 0, 0, 0, 1, 0), spacing=(0.5, 0.5),
-                      rows=64, columns=64, bits=16):
+                      rows=64, columns=64, bits=16, series_uid=None, series_description=None):
     """Write a minimal real DICOM file into the configured uploads directory.
 
     Returns the public URL form (`/static/uploads/<name>`) used in `dicom_file`.
@@ -269,6 +269,10 @@ def _write_test_dicom(name, *, orientation=(1, 0, 0, 0, 1, 0), spacing=(0.5, 0.5
     ds.BitsAllocated = bits
     ds.SOPClassUID = file_meta.MediaStorageSOPClassUID
     ds.SOPInstanceUID = file_meta.MediaStorageSOPInstanceUID
+    if series_uid is not None:
+        ds.SeriesInstanceUID = series_uid
+    if series_description is not None:
+        ds.SeriesDescription = series_description
 
     path = os.path.join(main.UPLOADS_DIR, name)
     ds.save_as(path, enforce_file_format=False)
@@ -314,6 +318,92 @@ def test_select_primary_series_unreadable_files_skipped_when_better_exists(clean
     primary2, skipped2 = main._select_primary_series([corrupt_only], record_id=8)
     assert primary2 == [corrupt_only]
     assert skipped2 == 0
+
+
+def test_group_dicom_series_by_series_instance_uid(clean_static):
+    """Distinct SeriesInstanceUIDs become separate, switchable series (largest first)."""
+    uid_a = "1.2.826.0.1.3680043.10.9999.1"
+    uid_b = "1.2.826.0.1.3680043.10.9999.2"
+    a_files = [_write_test_dicom(f"uid_a_{i}.dcm", series_uid=uid_a, series_description="CHEST") for i in range(3)]
+    b_files = [_write_test_dicom(f"uid_b_{i}.dcm", series_uid=uid_b) for i in range(2)]
+
+    series, unreadable = main._group_dicom_series(a_files + b_files, record_id=11)
+
+    assert unreadable == 0
+    assert len(series) == 2
+    assert series[0]["count"] == 3 and sorted(series[0]["urls"]) == sorted(a_files)
+    assert series[0]["uid"] == uid_a and series[0]["label"] == "CHEST"
+    assert series[1]["count"] == 2 and sorted(series[1]["urls"]) == sorted(b_files)
+    assert series[1]["uid"] == uid_b
+    assert series[0]["index"] == 0 and series[1]["index"] == 1
+
+
+def test_group_dicom_series_splits_incompatible_slices_within_uid(clean_static):
+    """One UID with mixed geometry still splits, because DWV rejects the mixed stack."""
+    uid = "1.2.826.0.1.3680043.10.9999.3"
+    consistent = [_write_test_dicom(f"same_{i}.dcm", series_uid=uid) for i in range(2)]
+    rotated = _write_test_dicom("rotated.dcm", series_uid=uid, orientation=(0, 1, 0, 1, 0, 0))
+
+    series, unreadable = main._group_dicom_series(consistent + [rotated], record_id=12)
+
+    assert unreadable == 0
+    assert len(series) == 2
+    assert series[0]["count"] == 2 and sorted(series[0]["urls"]) == sorted(consistent)
+    assert series[1]["urls"] == [rotated]
+    # Both sub-groups keep the same real UID, so labels stay tied to the study series.
+    assert series[0]["uid"] == uid and series[1]["uid"] == uid
+
+
+def test_group_dicom_series_counts_unreadable_files(clean_static):
+    good = _write_test_dicom("series_good.dcm", series_uid="1.2.826.0.1.3680043.10.9999.4")
+    corrupt_path = os.path.join(main.UPLOADS_DIR, "series_corrupt.dcm")
+    with open(corrupt_path, "wb") as handle:
+        handle.write(b"\x00\x01 broken dicom")
+    corrupt = "/static/uploads/series_corrupt.dcm"
+
+    series, unreadable = main._group_dicom_series([good, corrupt], record_id=13)
+
+    assert unreadable == 1
+    assert len(series) == 1
+    assert series[0]["urls"] == [good]
+
+
+def test_view_scan_series_switcher_and_query_param(admin_client, clean_static):
+    """The route serves the largest series by default and switches with ?series=N."""
+    uid_a = "1.2.826.0.1.3680043.10.9999.5"
+    uid_b = "1.2.826.0.1.3680043.10.9999.6"
+    a_files = [_write_test_dicom(f"sw_a_{i}.dcm", series_uid=uid_a, series_description="BIG") for i in range(3)]
+    b_files = [_write_test_dicom(f"sw_b_{i}.dcm", series_uid=uid_b, series_description="SMALL") for i in range(2)]
+    record_id = insert_record(
+        image_path=",".join(a_files + b_files),
+        dicom_file=",".join(a_files + b_files),
+    )
+
+    default_page = admin_client.get(f"/view-scan/{record_id}").text
+    # Switcher UI with both series, largest active by default.
+    assert 'class="series-switcher"' in default_page
+    assert "?series=0" in default_page and "?series=1" in default_page
+    assert "BIG" in default_page and "SMALL" in default_page
+    assert default_page.count("series-btn ") >= 2
+    # Primary payload carries the 3-slice series only.
+    for url in a_files:
+        assert url in default_page
+    for url in b_files:
+        assert url not in default_page
+
+    switched_page = admin_client.get(f"/view-scan/{record_id}?series=1").text
+    for url in b_files:
+        assert url in switched_page
+    for url in a_files:
+        assert url not in switched_page
+
+    # Out-of-range / garbage values clamp safely instead of erroring.
+    clamped = admin_client.get(f"/view-scan/{record_id}?series=99")
+    assert clamped.status_code == 200
+    assert a_files[0] in clamped.text
+    garbage = admin_client.get(f"/view-scan/{record_id}?series=abc")
+    assert garbage.status_code == 200
+    assert a_files[0] in garbage.text
 
 
 def test_view_scan_template_warns_on_skipped_files():

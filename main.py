@@ -457,15 +457,16 @@ def _is_raster_image_entry(entry: str) -> bool:
 
 # DWV-compatible fingerprint fields: slices must agree on all of these to share one stack
 # (mirrors what DWV enforces when appending slices — orientation, spacing, geometry, depth).
-_SERIES_FLOAT_TOLERANCE = 1e-4
+# Floats are rounded to 4 decimals so harmless scanner-level noise doesn't split a series.
 
 
-def _dicom_series_fingerprint(fs_path: str) -> dict | None:
-    """Return a hashable fingerprint of DWV-relevant DICOM fields, or ``None`` if unreadable.
+def _dicom_series_metadata(fs_path: str) -> dict | None:
+    """Read the DWV-relevant metadata of one DICOM file, or ``None`` if unreadable.
 
-    Fields: ``ImageOrientationPatient`` (rounded to 4 decimals), ``PixelSpacing``,
-    ``Rows``, ``Columns``, ``BitsAllocated``. A missing pixel-data-bearing field makes
-    the file "unknown/legacy" — callers must keep such files in a defensive solo group.
+    Returns ``{"fingerprint": (orientation, spacing, rows, columns, bits), "series_uid",
+    "description", "series_number"}``. ``fingerprint`` mirrors what DWV enforces when
+    appending slices; a missing pixel-data-bearing field makes the file unusable for the
+    viewer (corrupt/legacy), so it is reported as unreadable.
     """
     try:
         ds = pydicom.dcmread(fs_path, stop_before_pixels=True, force=True)
@@ -482,70 +483,144 @@ def _dicom_series_fingerprint(fs_path: str) -> dict | None:
     if any(value is None for value in required):
         return None
     try:
-        orientation_key = tuple(round(float(v), 4) for v in orientation)
-        spacing_key = tuple(round(float(v), 4) for v in pixel_spacing)
-        return {
-            "orientation": orientation_key,
-            "spacing": spacing_key,
-            "rows": int(rows),
-            "columns": int(columns),
-            "bits": int(bits),
-        }
+        fingerprint = (
+            tuple(round(float(v), 4) for v in orientation),
+            tuple(round(float(v), 4) for v in pixel_spacing),
+            int(rows),
+            int(columns),
+            int(bits),
+        )
     except (TypeError, ValueError):
         return None
 
+    series_uid = str(getattr(ds, "SeriesInstanceUID", "") or "").strip() or None
+    description = str(getattr(ds, "SeriesDescription", "") or "").strip() or None
+    try:
+        series_number = int(getattr(ds, "SeriesNumber", None))
+    except (TypeError, ValueError):
+        series_number = None
 
-def _select_primary_series(dicom_urls: list[str], record_id: int) -> tuple[list[str], int]:
-    """Group DICOM URLs by DWV compatibility and keep only the largest series.
+    return {
+        "fingerprint": fingerprint,
+        "series_uid": series_uid,
+        "description": description,
+        "series_number": series_number,
+    }
 
-    Returns ``(primary_urls, skipped_count)``. Files that cannot be fingerprinted
-    (corrupted headers, missing fields) form their own defensive group — they are only
-    chosen when they are the sole option, because loading them alongside fingerprinted
-    slices is exactly what triggers DWV's orientation-mismatch error.
+
+def _dicom_series_fingerprint(fs_path: str) -> dict | None:
+    """Return a hashable fingerprint of DWV-relevant DICOM fields, or ``None`` if unreadable.
+
+    Fields: ``ImageOrientationPatient`` (rounded to 4 decimals), ``PixelSpacing``,
+    ``Rows``, ``Columns``, ``BitsAllocated``.
     """
-    if len(dicom_urls) <= 1:
-        return dicom_urls, 0
+    metadata = _dicom_series_metadata(fs_path)
+    if metadata is None:
+        return None
+    orientation, spacing, rows, columns, bits = metadata["fingerprint"]
+    return {
+        "orientation": orientation,
+        "spacing": spacing,
+        "rows": rows,
+        "columns": columns,
+        "bits": bits,
+    }
 
-    groups: dict[tuple, list[str]] = {}
+
+def _group_dicom_series(dicom_urls: list[str], record_id: int) -> tuple[list[dict], int]:
+    """Group DICOM URLs into DWV-loadable series; return ``(series, unreadable_count)``.
+
+    Files are grouped first by ``SeriesInstanceUID`` (a real study series), then split by
+    the DWV compatibility fingerprint, so every returned group is safe to append as one
+    stack. Files that cannot be read/fingerprinted are counted, logged once, and excluded.
+
+    Each series dict: ``{"urls", "count", "uid", "label", "index"}`` — sorted largest
+    first, so index 0 is the best default. When *nothing* is fingerprintable, every file
+    is returned as one defensive group (the frontend per-file error handler remains the
+    last line of defence).
+    """
+    if not dicom_urls:
+        return [], 0
+
+    by_uid: dict[str, dict[tuple, list[str]]] = {}
+    by_fingerprint: dict[tuple, list[str]] = {}
     unreadable: list[str] = []
+    metadata_by_url: dict[str, dict] = {}
+
     for url in dicom_urls:
         fs_path = _upload_fs_path(url)
-        fingerprint = _dicom_series_fingerprint(fs_path) if fs_path else None
-        if fingerprint is None:
+        metadata = _dicom_series_metadata(fs_path) if fs_path and os.path.isfile(fs_path) else None
+        if metadata is None:
             unreadable.append(url)
             continue
-        key = (
-            fingerprint["orientation"],
-            fingerprint["spacing"],
-            fingerprint["rows"],
-            fingerprint["columns"],
-            fingerprint["bits"],
-        )
-        groups.setdefault(key, []).append(url)
+        metadata_by_url[url] = metadata
+        fingerprint = metadata["fingerprint"]
+        if metadata["series_uid"]:
+            by_uid.setdefault(metadata["series_uid"], {}).setdefault(fingerprint, []).append(url)
+        else:
+            by_fingerprint.setdefault(fingerprint, []).append(url)
 
-    # Largest fingerprinted group wins; all other fingerprinted groups are skipped.
-    if groups:
-        best_key = max(groups, key=lambda k: len(groups[k]))
-        primary = groups[best_key]
-        skipped = [url for key, urls in groups.items() if key != best_key for url in urls]
-    else:
-        # Nothing fingerprintable: fall back to a single defensive group of everything
-        # (DWV's per-file error handler remains the last line of defence).
-        primary = list(dicom_urls)
-        skipped = []
+    series: list[dict] = []
 
-    # Unreadable files only join the load when there is nothing better to show.
-    if not primary:
-        primary = unreadable
-    elif unreadable:
-        skipped.extend(unreadable)
+    def _add_group(urls: list[str], uid: str | None, description: str | None, number: int | None) -> None:
+        series.append({
+            "urls": urls,
+            "count": len(urls),
+            "uid": uid,
+            "description": description,
+            "number": number,
+        })
 
-    if skipped:
+    # Real series: each UID, then each compatible sub-group within it (geometry changes
+    # inside one UID would otherwise still poison DWV's stack).
+    for uid, fingerprint_groups in by_uid.items():
+        for urls in sorted(fingerprint_groups.values(), key=len, reverse=True):
+            first = metadata_by_url[urls[0]]
+            _add_group(urls, uid, first.get("description"), first.get("series_number"))
+
+    # Legacy files without a SeriesInstanceUID: fingerprint-only groups.
+    for urls in sorted(by_fingerprint.values(), key=len, reverse=True):
+        _add_group(urls, None, None, None)
+
+    # Largest series first so the viewer opens the richest stack by default.
+    series.sort(key=lambda item: item["count"], reverse=True)
+    for index, item in enumerate(series):
+        if item["description"]:
+            label = item["description"]
+        elif item["number"] is not None:
+            label = f"السلسلة {item['number']}"
+        else:
+            label = f"السلسلة {index + 1}"
+        item["label"] = label
+        item["index"] = index
+
+    if not series and unreadable:
+        series = [{
+            "urls": list(unreadable),
+            "count": len(unreadable),
+            "uid": None,
+            "label": "الملفات المتاحة",
+            "index": 0,
+        }]
+        unreadable = []
+
+    if unreadable:
         logger.warning(
-            "dicom: skipped %d incompatible slice(s) for record id=%s (kept %d): %s",
-            len(skipped), record_id, len(primary), ", ".join(skipped),
+            "dicom: skipped %d unreadable/unsupported file(s) for record id=%s: %s",
+            len(unreadable), record_id, ", ".join(unreadable),
         )
-    return primary, len(skipped)
+    return series, len(unreadable)
+
+
+def _select_primary_series(dicom_urls: list[str], record_id: int) -> tuple[list[str], int]:
+    """Backward-compatible wrapper: ``(primary_urls, files_outside_primary_count)``."""
+    if len(dicom_urls) <= 1:
+        return dicom_urls, 0
+    series, _unreadable_count = _group_dicom_series(dicom_urls, record_id)
+    if not series:
+        return [], 0
+    primary = series[0]["urls"]
+    return primary, len(dicom_urls) - len(primary)
 
 
 def _patient_token_allows(record_id: int, kind: str, file_path: str) -> bool:
@@ -643,12 +718,13 @@ def logout(request: Request):
     return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
 
 @app.get("/view-scan/{record_id}", response_class=HTMLResponse)
-def view_scan(request: Request, record_id: int, db: Session = Depends(get_db)):
-    """عارض DICOM الطبي للأدمن: يعرض أكبر سلسلة شرائح متوافقة الاتجاه.
+def view_scan(request: Request, record_id: int, series: str = "0", db: Session = Depends(get_db)):
+    """عارض DICOM الطبي للأدمن: يعرض سلسلة واحدة متوافقة، مع تبديل بين السلاسل.
 
-    DWV يرفض الستاك الواحد الذي يحتوي شرائح باتجاهات/أبعاد مختلفة
-    ("Cannot append a slice with different orientation")، لذلك نجمّع الملفات
-    في سلاسل متوافقة على الخادم ونمرر فقط أكبر سلسلة إلى العارض.
+    DWV يرفض الستاك الواحد الذي يخلط ``SeriesInstanceUID`` مختلفة أو شرائح غير
+    متوافقة هندسياً ("Cannot append a slice with different SeriesInstanceUID").
+    لذلك نجمّع الملفات على الخادم حسب السلسلة ثم حسب بصمة التوافق، ونعرض السلسلة
+    المختارة (الأكبر افتراضياً) مع واجهة تبديل واضحة بين بقية السلاسل.
     """
     if "user" not in request.session or request.session["user"]["role"] != "admin":
         return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
@@ -673,13 +749,28 @@ def view_scan(request: Request, record_id: int, db: Session = Depends(get_db)):
         if (fs := _upload_fs_path(p)) and os.path.isfile(fs)
     ]
 
-    dicom_urls, skipped_count = _select_primary_series(dicom_urls, record.id)
+    series_groups, skipped_count = _group_dicom_series(dicom_urls, record.id)
+
+    try:
+        requested_series = int(series)
+    except (TypeError, ValueError):
+        requested_series = 0
+    if series_groups and 0 <= requested_series < len(series_groups):
+        active_index = requested_series
+    else:
+        # Garbage or out-of-range selection falls back to the default (largest) series.
+        active_index = 0
+    active_urls = series_groups[active_index]["urls"] if series_groups else []
+    for index, group in enumerate(series_groups):
+        group["active"] = index == active_index
 
     template = env.get_template("view_scan.html")
     return HTMLResponse(content=template.render(
         request=request,
         record=record,
-        dicom_urls=dicom_urls,
+        dicom_urls=active_urls,
+        dicom_series=series_groups,
+        active_series=active_index,
         skipped_count=skipped_count
     ))
 
