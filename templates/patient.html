@@ -33,11 +33,25 @@
         .qr-img { width: 90px; height: 90px; object-fit: contain; }
         .btn-print { background: #16a34a; color: white; border: none; padding: 12px 25px; font-size: 16px; border-radius: 6px; cursor: pointer; font-weight: bold; display: block; margin: 25px auto; transition: 0.2s; }
         .btn-print:hover { background: #15803d; }
+        /* ===== الطباعة على A4 فقط ===== */
+        @page { size: A4 portrait; margin: 12mm 12mm 14mm; }
+
         @media print {
-            .btn-print, .btn-view-full { display: none !important; }
-            body { background: white; padding: 0; }
-            .patient-container { border: none; box-shadow: none; padding: 0; max-width: 100%; }
-            .lb-root { display: none !important; }
+            .btn-print, .btn-view-full, .zoom-btn, .lb-root { display: none !important; }
+            html, body { background: #fff !important; }
+            body { padding: 0; font-size: 11pt; color: #111827; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+            .patient-container { border: none; box-shadow: none; border-radius: 0; padding: 0; max-width: none; background: #fff !important; }
+            .header { border-bottom: 2px solid #1e3a8a; break-inside: avoid; }
+            .header h2 { font-size: 16pt; }
+            .header p { color: #334155; }
+            .info-grid { font-size: 10.5pt; gap: 2mm; background: #fff !important; border: 1px solid #94a3b8; break-inside: avoid; }
+            /* لا يحتوي الطباعة على 560px فقط: كل الصور تُطبع، والبطاقة لا تنقسم بين صفحتين */
+            .scans-scroll { max-height: none !important; overflow: visible !important; padding: 0; border: none; background: #fff; }
+            .scans-grid { grid-template-columns: repeat(3, 1fr); gap: 4mm; }
+            .scan-card { break-inside: avoid; box-shadow: none; border: 1px solid #94a3b8; }
+            .image-preview-section { border-top: 1px solid #94a3b8; }
+            .footer { border-top: 1px solid #94a3b8; break-inside: avoid; }
+            .qr-img { width: 32mm; height: 32mm; }
         }
 
         /* ===== Medical-grade Lightbox (shared look & behavior) ===== */

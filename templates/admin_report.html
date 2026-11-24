@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>عرض التقرير - #{{ record.id }}</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --brand-blue: #0068a8;
+            --brand-blue-dark: #004f80;
+            --brand-gold: #f8c000;
+            --text: #1e293b;
+            --muted: #64748b;
+            --line: #e2e8f0;
+            --line-strong: #cbd5e1;
+            --surface-2: #f8fafc;
+        }
+        * { box-sizing: border-box; }
+        body { font-family: Tahoma, "Segoe UI", sans-serif; background: radial-gradient(1100px 520px at 88% -12%, rgba(0, 104, 168, 0.08), transparent 62%), radial-gradient(900px 460px at -6% 108%, rgba(248, 192, 0, 0.05), transparent 58%), #f1f5f9; margin: 0; padding: 24px; color: var(--text); }
+        .container { max-width: 1080px; margin: auto; }
+
+        .report-card { background: #fff; border: 1px solid #d9e5ef; border-radius: 14px; box-shadow: 0 6px 24px rgba(0, 104, 168, 0.07); overflow: hidden; }
+
+        /* شعار المركز والطبيب (نفس هوية لوحة التحكم) */
+        .brand-head { display: flex; align-items: center; gap: 16px; padding: 20px 22px; border-bottom: 1px solid var(--line); background: linear-gradient(180deg, rgba(0, 104, 168, 0.05) 0%, #ffffff 70%); position: relative; }
+        .brand-head::after { content: ""; position: absolute; inset-inline-start: 0; bottom: 0; width: 100%; height: 3px; background: linear-gradient(90deg, var(--brand-gold) 0%, rgba(248, 192, 0, 0.15) 60%, transparent 100%); }
+        .brand-logo { width: 76px; height: 76px; object-fit: contain; border-radius: 12px; background: #fff; border: 1px solid var(--line); padding: 6px; flex: 0 0 auto; }
+        .brand-head h1 { margin: 0; font-size: 19px; color: var(--brand-blue-dark); }
+        .brand-head p { margin: 4px 0 0; font-size: 13px; color: var(--muted); }
+
+        /* شريط الإجراءات: زر العودة الواضح + الطباعة */
+        .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 16px 22px; border-bottom: 1px solid var(--line); background: #fff; }
+        .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 38px; padding: 0 16px; border-radius: 8px; font-weight: bold; font-size: 13.5px; font-family: inherit; text-decoration: none; border: 1px solid transparent; cursor: pointer; transition: background 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.12s; }
+        .btn:active { transform: translateY(1px); }
+        .btn-primary { background: var(--brand-blue); color: #fff; }
+        .btn-primary:hover { background: var(--brand-blue-dark); box-shadow: 0 4px 12px rgba(0, 104, 168, 0.3); }
+        .btn-soft { background: #e6f2fa; color: #075e8f; border-color: #b9d9ee; }
+        .btn-soft:hover { background: #d3e9f7; }
+        .btn-outline { background: #fff; color: #334155; border-color: var(--line-strong); }
+        .btn-outline:hover { background: var(--surface-2); border-color: #94a3b8; }
+        .record-chip { margin-inline-start: auto; background: #e6f2fa; color: #075e8f; border: 1px solid #b9d9ee; border-radius: 999px; padding: 6px 14px; font-size: 13px; font-weight: bold; }
+
+        .body { padding: 22px; }
+
+        /* معلومات السجل الأساسية فقط */
+        .info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 20px; }
+        .info-item { background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+        .info-item span { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+        .info-item b { font-size: 14px; color: #0f172a; }
+
+        /* التقرير + QR فقط (لا صور أشعة ولا معاينات) */
+        .content-grid { display: grid; grid-template-columns: 1fr 240px; gap: 18px; align-items: start; }
+        .panel { border: 1px solid var(--line); border-radius: 12px; background: #fff; overflow: hidden; }
+        .panel-head { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--line); color: var(--brand-blue-dark); font-weight: bold; font-size: 14px; background: var(--surface-2); }
+        .panel-head i { color: var(--brand-blue); }
+        .report-text { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; font-size: 14.5px; line-height: 1.95; color: #1e293b; padding: 18px 20px; min-height: 190px; }
+        .report-text.empty { color: var(--muted); font-style: italic; display: flex; align-items: center; justify-content: center; text-align: center; }
+
+        .qr-panel { text-align: center; }
+        .qr-body { padding: 18px 16px 22px; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+        .qr-img { width: 168px; height: 168px; object-fit: contain; background: #fff; border: 1px solid var(--line-strong); border-radius: 10px; padding: 8px; }
+        .qr-empty { width: 168px; height: 168px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; color: var(--muted); font-size: 12.5px; border: 1px dashed var(--line-strong); border-radius: 10px; background: var(--surface-2); }
+        .qr-body .btn { width: 100%; }
+
+        .footer-note { margin: 18px 0 0; text-align: center; font-size: 12.5px; color: var(--muted); }
+        .footer-note a { color: var(--brand-blue); font-weight: bold; }
+
+        @media (max-width: 760px) {
+            body { padding: 12px; }
+            .content-grid { grid-template-columns: 1fr; }
+            .brand-head { flex-wrap: wrap; }
+            .record-chip { margin-inline-start: 0; }
+        }
+        /* ===== الطباعة على A4 فقط ===== */
+        @page { size: A4 portrait; margin: 14mm 14mm 16mm; }
+
+        @media print {
+            html, body { background: #fff !important; }
+            body {
+                padding: 0;
+                font-size: 11.5pt;
+                color: #111827;
+                print-color-adjust: exact;
+                -webkit-print-color-adjust: exact;
+            }
+            /* أزرار التنقل والتحميل والملاحظات لا تُطبع */
+            .toolbar, .footer-note, .qr-body .btn { display: none !important; }
+
+            .container { max-width: none; }
+            .report-card { border: none; border-radius: 0; box-shadow: none; }
+
+            .brand-head {
+                padding: 0 0 4mm;
+                border-bottom: 2px solid #004f80;
+                background: none !important;
+                break-inside: avoid;
+            }
+            .brand-head::after { display: none; }
+            .brand-logo { width: 56px; height: 56px; padding: 4px; }
+            .brand-head h1 { font-size: 16pt; color: #00407a; }
+            .brand-head p { font-size: 10pt; color: #334155; }
+
+            .body { padding: 4mm 0 0; }
+
+            /* بيانات السجل: صف واحد مضغوط لا ينقسم بين صفحتين */
+            .info-grid { grid-template-columns: repeat(auto-fit, minmax(36mm, 1fr)); gap: 2mm; margin-bottom: 5mm; break-inside: avoid; }
+            .info-item { background: #fff; border: 1px solid #94a3b8; padding: 2.5mm 3mm; break-inside: avoid; }
+            .info-item span { font-size: 9pt; color: #475569; }
+            .info-item b { font-size: 11pt; color: #111827; overflow-wrap: anywhere; }
+
+            /* عمود واحد: التقرير بعرض الصفحة كاملاً ثم QR أسفله — لا شبكة تنقسم بين الصفحات */
+            .content-grid { display: block; }
+            .panel { border: 1px solid #94a3b8; border-radius: 0; }
+            .panel-head { background: #eef4f9 !important; color: #00407a; font-size: 11pt; padding: 2mm 3mm; break-after: avoid; }
+            .report-text { font-size: 11.5pt; line-height: 1.8; padding: 4mm; min-height: 0; color: #111827; }
+            .report-text.empty { color: #475569; }
+
+            .qr-panel { margin-top: 5mm; break-inside: avoid; }
+            .qr-body { padding: 4mm; }
+            .qr-img { width: 42mm; height: 42mm; padding: 2mm; border: 1px solid #475569; border-radius: 0; }
+            .qr-empty { width: 42mm; height: 42mm; font-size: 9pt; color: #475569; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="report-card">
+            <div class="brand-head">
+                <img src="/static/image/MRI%20IMAGE.jpg" class="brand-logo" alt="شعار المركز">
+                <div>
+                    <h1>مركز محردة للرنين المغناطيسي والطبقي المحوري</h1>
+                    <p>الدكتور سامر ممدوح سعد — عرض التقرير الطبي</p>
+                </div>
+            </div>
+
+            <div class="toolbar">
+                <a href="/doctor" class="btn btn-primary"><i class="fa-solid fa-arrow-right"></i> عودة إلى لوحة التحكم</a>
+                <button type="button" class="btn btn-soft" onclick="window.print()"><i class="fa-solid fa-print"></i> طباعة التقرير</button>
+                <span class="record-chip">سجل #{{ record.id }}</span>
+            </div>
+
+            <div class="body">
+                <div class="info-grid">
+                    <div class="info-item"><span>اسم المريض</span><b>{{ record.patient_name }}</b></div>
+                    <div class="info-item"><span>تاريخ الولادة</span><b>{{ record.birth_date }}</b></div>
+                    <div class="info-item"><span>نوع الفحص</span><b>{{ record.modality or 'غير متوفر' }}</b></div>
+                    <div class="info-item"><span>تاريخ الرفع</span><b>{{ record.created_at }}</b></div>
+                </div>
+
+                <div class="content-grid">
+                    {% set report_text = (record.report or '').strip() %}
+                    <div class="panel">
+                        <div class="panel-head"><i class="fa-solid fa-file-medical"></i> التقرير الطبي التشخيصي</div>
+                        {% if report_text and not report_text.startswith('بانتظار كتابة') %}
+                        <div class="report-text">{{ report_text }}</div>
+                        {% else %}
+                        <div class="report-text empty">بانتظار كتابة التقرير الطبي…</div>
+                        {% endif %}
+                    </div>
+
+                    <div class="panel qr-panel">
+                        <div class="panel-head"><i class="fa-solid fa-qrcode"></i> رمز QR</div>
+                        <div class="qr-body">
+                            {% if qr_available %}
+                            <img src="/static/qrs/{{ record.qr_code }}" class="qr-img" alt="رمز QR للسجل {{ record.id }}">
+                            <a href="/static/qrs/{{ record.qr_code }}" download="QR_Patient_{{ record.id }}.png" class="btn btn-outline"><i class="fa-solid fa-download"></i> تحميل الـ QR</a>
+                            {% else %}
+                            <div class="qr-empty"><i class="fa-solid fa-qrcode" style="font-size: 30px; opacity: 0.45;"></i><span>لا يوجد رمز QR لهذا السجل بعد</span></div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+
+                <p class="footer-note">هذا العرض مخصص لطبيب المركز ويعرض التقرير ورمز QR فقط — <a href="/doctor">العودة إلى لوحة التحكم</a></p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

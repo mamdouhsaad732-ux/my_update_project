@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Depends, Request, Form, HTTPException, status, UploadFile, File
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
@@ -185,6 +185,20 @@ def write_qr(record_id: int, base_url: str) -> str:
 def legacy_patient_urls_enabled() -> bool:
     """Labels printed before signed URLs existed keep working until the flag is retired."""
     return os.getenv("LEGACY_PATIENT_URLS", "true").strip().lower() in TRUTHY_VALUES
+
+
+# Dashboards and report pages show patient data that changes on every save. Browsers and
+# intermediary proxies must never serve a stale copy after a report is written.
+_NO_STORE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
+
+def _html_no_store(content: str, status_code: int = 200) -> HTMLResponse:
+    """HTML response that forbids caching (stale reports were being shown to users)."""
+    return HTMLResponse(content=content, status_code=status_code, headers=_NO_STORE_HEADERS)
 
 
 def safe_next_path(next_url: str, fallback: str) -> str:
@@ -812,7 +826,37 @@ def doctor_dashboard(request: Request, db: Session = Depends(get_db)):
         cleanup_old_records(db)
     records = db.query(PatientRecord).all()
     template = env.get_template("doctor.html")
-    return HTMLResponse(content=template.render(request=request, records=records, user=request.session["user"]))
+    return _html_no_store(template.render(request=request, records=records, user=request.session["user"]))
+
+
+@app.get("/doctor/report/{record_id}", response_class=HTMLResponse)
+def doctor_report_view(record_id: int, request: Request, db: Session = Depends(get_db)):
+    """Admin-only report view: record basics + saved report + QR, and no imaging section.
+
+    The public patient portal (``/patient/{token}``) is deliberately untouched; this
+    page exists so the admin dashboard can open a report **in the same tab**.
+    """
+    if "user" not in request.session or request.session["user"]["role"] != "admin":
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+
+    record = db.query(PatientRecord).filter(PatientRecord.id == record_id).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="السجل غير موجود")
+
+    # Only surface a QR whose file actually exists, so the page never shows a broken image.
+    qr_available = bool(record.qr_code) and record.qr_code != "temp.png"
+    if qr_available:
+        qr_fs = _qr_fs_path(record.qr_code)
+        qr_available = bool(qr_fs) and os.path.isfile(qr_fs)
+
+    template = env.get_template("admin_report.html")
+    return _html_no_store(template.render(
+        request=request,
+        record=record,
+        user=request.session["user"],
+        qr_available=qr_available,
+    ))
+
 
 @app.post("/doctor/delete/{record_id}")
 def doctor_delete_record(record_id: int, request: Request, db: Session = Depends(get_db)):
@@ -980,7 +1024,7 @@ def archive_records(modality: str, month: str, day: str, request: Request, db: S
                     </td>
                     <td>{qr_element}</td>
                     <td>
-                        <form action="/save-report" method="post" onsubmit="return confirm('هل أنت متأكد من حفظ التقرير الطبي؟');">
+                        <form action="/save-report" method="post">
                             <input type="hidden" name="record_id" value="{record.id}">
                             <input type="hidden" name="next" value="{archive_next}">
                             <textarea name="report">{html.escape(record.report or "", quote=True)}</textarea>
@@ -988,7 +1032,7 @@ def archive_records(modality: str, month: str, day: str, request: Request, db: S
                         </form>
                     </td>
                     <td>
-                        <a href="/download-report/{record.id}" onclick="return confirm('هل تريد حفظ وطباعة التقرير الآن؟');" class="btn" style="background: #0284c7; margin-bottom: 5px; display: block;">Word / طباعة</a>
+                        <a href="/download-report/{record.id}" class="btn" style="background: #0284c7; margin-bottom: 5px; display: block;">Word / طباعة</a>
                         <a href="/patient/{record.id}" target="_blank" class="btn" style="background: #9333ea; display: block; margin-bottom: 5px;">QR</a>
                         <form action="/doctor/delete/{record.id}" method="post" onsubmit="return confirm('هل أنت متأكد من حذف هذا السجل والصور نهائياً؟');">
                             <button type="submit" class="btn" style="background: #dc2626; border:none; cursor:pointer; width:100%;">حذف السجل</button>
@@ -1049,7 +1093,7 @@ def secretary_dashboard(request: Request, db: Session = Depends(get_db)):
         return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
     records = db.query(PatientRecord).all()
     template = env.get_template("secretary.html")
-    return HTMLResponse(content=template.render(request=request, records=records, user=request.session["user"], success=request.query_params.get("success")))
+    return _html_no_store(template.render(request=request, records=records, user=request.session["user"], success=request.query_params.get("success")))
 @app.post("/technician/delete/{record_id}")
 def technician_delete_record(record_id: int, request: Request, db: Session = Depends(get_db)):
     user = request.session.get("user")
@@ -1087,26 +1131,69 @@ def secretary_qr_preview(record_id: int, request: Request, db: Session = Depends
     safe_report = html.escape(record.report or "", quote=True)
     safe_next = html.escape(f"/secretary/qr-preview/{record.id}", quote=True)
 
+    # Never print a broken image: the QR panel only renders when the file is on disk.
+    qr_available = bool(record.qr_code) and record.qr_code != "temp.png"
+    if qr_available:
+        qr_fs = _qr_fs_path(record.qr_code)
+        qr_available = bool(qr_fs) and os.path.isfile(qr_fs)
+
+    # The printed copy must be readable text, not the hidden textarea.
+    pending_text = "بانتظار كتابة التقرير الطبي…"
+    printable_report = (record.report or "").strip()
+    if not printable_report or printable_report.startswith("بانتظار كتابة"):
+        printable_report = pending_text
+    safe_printable_report = html.escape(printable_report, quote=True)
+
+    if qr_available:
+        qr_markup = (
+            f'<img src="/static/qrs/{safe_qr}" class="qr-img" '
+            f'alt="رمز QR للسجل {record.id}">'
+        )
+    else:
+        qr_markup = '<div class="qr-empty">لا يوجد رمز QR لهذا السجل بعد</div>'
+
     html_content = f"""<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>معاينة وتعديل التقرير - {safe_name}</title>
     <style>
-        body {{ font-family: Tahoma, sans-serif; background: #f8fafc; padding: 30px; color: #1e293b; }}
+        @page {{ size: A4 portrait; margin: 14mm; }}
+        body {{ font-family: Tahoma, "Segoe UI", sans-serif; background: #f8fafc; padding: 30px; color: #1e293b; }}
         .card {{ max-width: 750px; background: white; margin: auto; padding: 30px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); text-align: center; }}
-        .qr-img {{ width: 200px; height: 200px; margin: 15px auto; border: 2px solid #e2e8f0; padding: 10px; border-radius: 8px; }}
+        .patient-info {{ text-align: right; margin-bottom: 15px; font-size: 15px; }}
+        .patient-info p {{ margin: 6px 0; }}
+        .qr-wrap {{ text-align: center; }}
+        .qr-img {{ width: 200px; height: 200px; margin: 15px auto; border: 2px solid #e2e8f0; padding: 10px; border-radius: 8px; background: #fff; object-fit: contain; }}
+        .qr-empty {{ width: 200px; height: 200px; margin: 15px auto; border: 2px dashed #cbd5e1; border-radius: 8px; display: flex; align-items: center; justify-content: center; text-align: center; color: #64748b; font-size: 13px; background: #f8fafc; }}
         .report-box {{ text-align: right; background: #f1f5f9; padding: 15px; border-radius: 6px; margin-top: 20px; }}
+        .report-title {{ margin: 0 0 10px; color: #1e3a8a; text-align: right; }}
         textarea {{ width: 100%; height: 120px; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-family: Tahoma, sans-serif; font-size: 14px; resize: vertical; box-sizing: border-box; }}
         .btn {{ background: #2563eb; color: white; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; text-decoration: none; display: inline-block; margin-top: 20px; font-size: 14px; }}
         .btn-save {{ background: #16a34a; margin-left: 10px; }}
         .btn-back {{ background: #64748b; margin-left: 10px; }}
+        /* نسخة الطباعة من التقرير مخفية على الشاشة (الحقل القابل للتعديل هو الظاهر) */
+        .print-show {{ display: none; }}
+
         @media print {{
+            html, body {{ background: #fff !important; }}
+            body {{ padding: 0; font-size: 11.5pt; color: #111827; print-color-adjust: exact; -webkit-print-color-adjust: exact; }}
             .btn, .btn-back, textarea, .print-hide {{ display: none !important; }}
+
+            .card {{ max-width: none; padding: 0; border: none; border-radius: 0; box-shadow: none; }}
+            h2 {{ margin: 0 0 4mm; padding-bottom: 3mm; border-bottom: 2px solid #004f80; font-size: 16pt; color: #00407a; }}
+            .patient-info {{ font-size: 11pt; margin-bottom: 4mm; }}
+            .patient-info p {{ margin: 1.5mm 0; }}
+
+            .qr-wrap {{ margin-bottom: 5mm; break-inside: avoid; }}
+            .qr-img {{ width: 42mm; height: 42mm; margin: 0 auto; padding: 2mm; border: 1px solid #475569; border-radius: 0; }}
+            .qr-empty {{ width: 42mm; height: 42mm; margin: 0 auto; font-size: 9pt; color: #475569; }}
+
+            .report-box {{ background: none; padding: 0; margin: 0; border-radius: 0; }}
+            .report-title {{ margin: 0 0 2mm; padding-bottom: 1.5mm; border-bottom: 1px solid #94a3b8; font-size: 11.5pt; color: #00407a; }}
             .print-show {{ display: block !important; }}
-            body {{ background: white; padding: 0; }}
-            .card {{ box-shadow: none; border: none; }}
-            textarea {{ border: none; background: transparent; resize: none; }}
+            .report-text {{ white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11.5pt; line-height: 1.85; color: #111827; }}
         }}
     </style>
 </head>
@@ -1115,14 +1202,14 @@ def secretary_qr_preview(record_id: int, request: Request, db: Session = Depends
         <h2>معاينة بيانات المريض وتقرير الفحص</h2>
         <hr style="border:0; border-top:1px solid #e2e8f0; margin: 15px 0;">
         
-        <div style="text-align: right; margin-bottom: 15px; font-size: 15px;">
+        <div class="patient-info">
             <p><strong>اسم المريض:</strong> {safe_name}</p>
             <p><strong>تاريخ الميلاد:</strong> {safe_birth}</p>
             <p><strong>نوع الفحص (Modality):</strong> {safe_modality}</p>
         </div>
         
-        <div>
-            <img src="/static/qrs/{safe_qr}" class="qr-img" alt="QR Code">
+        <div class="qr-wrap">
+            {qr_markup}
             <p class="print-hide" style="font-size: 13px; color: #64748b;">رمز الاستجابة السريعة الخاص بالفحص</p>
         </div>
 
@@ -1131,21 +1218,34 @@ def secretary_qr_preview(record_id: int, request: Request, db: Session = Depends
             <input type="hidden" name="record_id" value="{record.id}">
             <input type="hidden" name="next" value="{safe_next}">
             <div class="report-box">
-                <h4 style="margin-top: 0; color: #1e3a8a; text-align: right;">التقرير التشخيصي والملاحظات:</h4>
-                <textarea name="report">{safe_report}</textarea>
+                <h4 class="report-title">التقرير التشخيصي والملاحظات:</h4>
+                <textarea name="report" id="reportInput">{safe_report}</textarea>
+                <div class="report-text print-show" id="reportPrint">{safe_printable_report}</div>
             </div>
 
             <div style="margin-top: 25px;">
                 <a href="/secretary" class="btn btn-back">← العودة</a>
                 <button type="submit" class="btn btn-save">💾 حفظ التقرير</button>
-                <button type="button" onclick="window.print()" class="btn">🖨️ طباعة الكل</button>
+                <button type="button" onclick="window.syncPrintReport(); window.print();" class="btn">🖨️ طباعة الكل</button>
             </div>
         </form>
     </div>
+
+    <script>
+        (function () {{
+            var input = document.getElementById('reportInput');
+            var output = document.getElementById('reportPrint');
+            /* Print exactly what is in the editor, even if it has not been saved yet. */
+            window.syncPrintReport = function () {{
+                if (input && output) output.textContent = input.value;
+            }};
+            window.addEventListener('beforeprint', window.syncPrintReport);
+        }})();
+    </script>
 </body>
 </html>
 """
-    return HTMLResponse(content=html_content)
+    return _html_no_store(html_content)
 @app.post("/save-report")
 @app.post("/save-report-inline", include_in_schema=False, deprecated=True)
 def save_report(
@@ -1159,23 +1259,63 @@ def save_report(
 
     ``/save-report-inline`` is the pre-Ticket-03 name and shares this exact function
     object; it exists so a browser tab holding the old preview page still works.
+
+    Dashboards submit via ``fetch`` with ``Accept: application/json`` so the UI can show
+    success/failure inline without a full reload; plain form posts keep the historical
+    303 redirect behaviour. A failed write is rolled back and reported loudly — never
+    swallowed.
     """
+    wants_json = "application/json" in request.headers.get("accept", "").lower()
+
+    def error_response(message: str, status_code: int, back_url: str = "/doctor"):
+        if wants_json:
+            return JSONResponse(status_code=status_code, content={"ok": False, "error": message})
+        # Non-JS clients get a readable page instead of a silent redirect or raw 500.
+        template = env.get_template("report_error.html")
+        return HTMLResponse(
+            status_code=status_code,
+            content=template.render(request=request, message=message, back_url=back_url),
+        )
+
     user = request.session.get("user")
     role = user.get("role") if user else None
     if role not in {"admin", "secretary"}:
+        if wants_json:
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={"ok": False, "error": "انتهت الجلسة أو لا تملك صلاحية حفظ التقرير. سجّل الدخول من جديد."},
+            )
         # Check the gate before the query: an outsider must not even learn which ids exist.
         return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
 
+    back_url = "/doctor" if role == "admin" else "/secretary"
     record = db.query(PatientRecord).filter(PatientRecord.id == record_id).first()
     if record is None:
-        raise HTTPException(status_code=404, detail="السجل غير موجود")
+        return error_response("السجل غير موجود أو تم حذفه.", status.HTTP_404_NOT_FOUND, back_url)
 
-    record.report = report
-    # Mint before the commit: a QR failure must not leave the record half-saved.
-    record.qr_code = write_qr(record.id, str(request.base_url))
-    db.commit()
+    try:
+        record.report = report
+        # Mint before the commit: a QR failure must not leave the record half-saved.
+        record.qr_code = write_qr(record.id, str(request.base_url))
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("report: failed to save record id=%s role=%s", record_id, role)
+        return error_response(
+            "تعذر حفظ التقرير بسبب خطأ في الخادم. لم يُحفظ أي تغيير — حاول مرة أخرى.",
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            back_url,
+        )
 
     logger.info("report: saved record id=%s role=%s", record_id, role)
+
+    if wants_json:
+        return JSONResponse(content={
+            "ok": True,
+            "record_id": record.id,
+            "report": record.report,
+            "message": "تم حفظ التقرير بنجاح.",
+        })
 
     fallback = "/doctor" if role == "admin" else "/secretary"
     return RedirectResponse(
@@ -1191,19 +1331,61 @@ def download_report(record_id: int, request: Request, db: Session = Depends(get_
     record = db.query(PatientRecord).filter(PatientRecord.id == record_id).first()
     if record is None:
         raise HTTPException(status_code=404, detail="السجل غير موجود")
-    
-    file_content = f"""========================================
-مركز التشخيص الطبي والتصوير الشعاعي
-========================================
-رقم السجل: #{record.id}
-اسم المريض: {record.patient_name}
-تاريخ الولادة: {record.birth_date}
-نوع الفحص (Modality): {record.modality}
-تاريخ الإنشاء: {record.created_at}
-----------------------------------------
-التقرير الطبي التشخيصي:
-{record.report}
-========================================
+
+    # The export is a Word-readable HTML document with an explicit A4 page box, so the
+    # printed report keeps the same margins and type sizes as the on-screen report page.
+    qr_available = bool(record.qr_code) and record.qr_code != "temp.png"
+    if qr_available:
+        qr_fs = _qr_fs_path(record.qr_code)
+        qr_available = bool(qr_fs) and os.path.isfile(qr_fs)
+
+    qr_block = ""
+    if qr_available:
+        qr_url = f"{str(request.base_url).rstrip('/')}/static/qrs/{record.qr_code}"
+        qr_block = (
+            '<p class="qr"><img src="%s" width="159" height="159" alt="QR"></p>'
+            % html.escape(qr_url, quote=True)
+        )
+
+    def esc(value):
+        return html.escape(str(value if value not in (None, "") else "-"), quote=True)
+
+    report_text = (record.report or "").strip() or "لا يوجد تقرير محفوظ."
+
+    file_content = f"""<!DOCTYPE html>
+<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <title>تقرير المريض #{record.id}</title>
+    <style>
+        @page WordSection1 {{ size: 21cm 29.7cm; margin: 14mm; }}
+        div.WordSection1 {{ page: WordSection1; }}
+        body {{ font-family: Tahoma, "Segoe UI", sans-serif; font-size: 11.5pt; line-height: 1.8; color: #111827; direction: rtl; }}
+        h1 {{ margin: 0 0 4mm; padding-bottom: 3mm; border-bottom: 2px solid #004f80; font-size: 16pt; color: #00407a; text-align: center; }}
+        h2 {{ margin: 4mm 0 2mm; font-size: 11.5pt; color: #00407a; }}
+        table {{ width: 100%; border-collapse: collapse; margin: 0 0 4mm; }}
+        th, td {{ border: 1px solid #94a3b8; padding: 2mm 3mm; font-size: 11pt; text-align: right; }}
+        th {{ width: 32%; background: #eef4f9; color: #00407a; }}
+        .report {{ white-space: pre-wrap; border: 1px solid #94a3b8; padding: 4mm; font-size: 11.5pt; }}
+        .qr {{ margin: 4mm 0 0; text-align: center; }}
+    </style>
+</head>
+<body>
+<div class="WordSection1">
+    <h1>مركز التشخيص الطبي والتصوير الشعاعي</h1>
+    <table>
+        <tr><th>رقم السجل</th><td>#{record.id}</td></tr>
+        <tr><th>اسم المريض</th><td>{esc(record.patient_name)}</td></tr>
+        <tr><th>تاريخ الولادة</th><td>{esc(record.birth_date)}</td></tr>
+        <tr><th>نوع الفحص</th><td>{esc(record.modality)}</td></tr>
+        <tr><th>تاريخ الإنشاء</th><td>{esc(record.created_at)}</td></tr>
+    </table>
+    <h2>التقرير الطبي التشخيصي</h2>
+    <div class="report">{esc(report_text)}</div>
+    {qr_block}
+</div>
+</body>
+</html>
 """
     return Response(
         content=file_content,

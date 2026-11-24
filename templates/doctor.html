@@ -92,8 +92,13 @@
         .modal-card .modal-sub { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
         .modal-card textarea { width: 100%; min-height: 190px; padding: 12px; border: 1px solid var(--line-strong); border-radius: 8px; font-family: inherit; font-size: 14px; line-height: 1.8; resize: vertical; }
         .modal-card textarea:focus { outline: 2px solid rgba(0, 104, 168, 0.35); border-color: var(--brand-blue); }
-        .modal-actions { display: flex; gap: 10px; margin-top: 16px; }
+        .modal-actions { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
         .modal-actions .btn { min-width: 130px; }
+        .modal-status { margin: 10px 0 0; font-size: 13px; font-weight: bold; line-height: 1.7; min-height: 18px; }
+        .modal-status.info { color: #64748b; }
+        .modal-status.success { color: #15803d; }
+        .modal-status.error { color: #b91c1c; }
+        .btn[disabled] { opacity: 0.65; cursor: not-allowed; transform: none; box-shadow: none; }
 
         @media (max-width: 720px) {
             body { padding: 12px; }
@@ -163,9 +168,10 @@
                                     {% endif %}
                                 </td>
                                 <td class="report-cell">
+                                    {% set report_text = (record.report or '').strip() %}
                                     <div class="report-preview">
-                                        {% if record.report and record.report.strip() and 'بانتظار' not in record.report %}
-                                            {{ record.report }}
+                                        {% if report_text and not report_text.startswith('بانتظار كتابة') %}
+                                            {{ report_text }}
                                         {% else %}
                                             <span class="report-empty">بانتظار كتابة التقرير الطبي…</span>
                                         {% endif %}
@@ -180,8 +186,8 @@
                                 </td>
                                 <td>
                                     <div class="actions-cell">
-                                        <a href="/download-report/{{ record.id }}" onclick="return confirm('هل تريد تحميل وطباعة التقرير الآن؟');" class="btn btn-soft span-2"><i class="fa-solid fa-print"></i> تحميل التقرير (Word / طباعة)</a>
-                                        <a href="/patient/{{ record.id }}" target="_blank" class="btn btn-outline"><i class="fa-solid fa-qrcode"></i> معاينة QR</a>
+                                        <a href="/download-report/{{ record.id }}" class="btn btn-soft span-2"><i class="fa-solid fa-print"></i> تحميل التقرير (Word / طباعة)</a>
+                                        <a href="/doctor/report/{{ record.id }}" class="btn btn-outline"><i class="fa-solid fa-file-lines"></i> عرض التقرير</a>
                                         {% if record.qr_code and record.qr_code != "temp.png" %}
                                         <a href="/static/qrs/{{ record.qr_code }}" download="QR_Patient_{{ record.id }}.png" class="btn btn-outline"><i class="fa-solid fa-download"></i> تحميل QR</a>
                                         {% else %}
@@ -209,12 +215,13 @@
         <div class="modal-card">
             <h3><i class="fa-solid fa-file-medical"></i> التقرير الطبي التشخيصي</h3>
             <p class="modal-sub" id="modalSubtitle"></p>
-            <form action="/save-report" method="post" onsubmit="return confirm('هل أنت متأكد من حفظ وتحديث التقرير الطبي؟');">
+            <form action="/save-report" method="post">
                 <input type="hidden" name="record_id" id="modalRecordId" value="">
                 <input type="hidden" name="next" id="modalNext" value="/doctor">
                 <textarea name="report" id="modalReportInput" placeholder="اكتب التقرير التشخيصي والملاحظات هنا…"></textarea>
+                <p class="modal-status" id="modalStatus" role="status" aria-live="polite"></p>
                 <div class="modal-actions">
-                    <button type="submit" class="btn btn-success"><i class="fa-solid fa-floppy-disk"></i> حفظ التقرير</button>
+                    <button type="submit" class="btn btn-success" id="modalSave"><i class="fa-solid fa-floppy-disk"></i> حفظ التقرير</button>
                     <button type="button" class="btn btn-outline" id="modalCancel">إلغاء</button>
                 </div>
             </form>
@@ -226,16 +233,25 @@
         (function () {
             var modal = document.getElementById('reportModal');
             if (!modal) return;
+            var form = modal.querySelector('form');
             var titleEl = document.getElementById('modalSubtitle');
             var input = document.getElementById('modalReportInput');
             var recordIdInput = document.getElementById('modalRecordId');
             var nextInput = document.getElementById('modalNext');
+            var saveBtn = document.getElementById('modalSave');
+            var statusEl = document.getElementById('modalStatus');
+
+            function setStatus(message, kind) {
+                statusEl.textContent = message || '';
+                statusEl.className = 'modal-status' + (kind ? ' ' + kind : '');
+            }
 
             function openModal(btn) {
                 recordIdInput.value = btn.getAttribute('data-record-id') || '';
                 nextInput.value = btn.getAttribute('data-next') || '/doctor';
                 input.value = btn.getAttribute('data-report') || '';
                 titleEl.textContent = 'المريض: ' + (btn.getAttribute('data-patient-name') || '') + ' — سجل #' + (btn.getAttribute('data-record-id') || '');
+                setStatus('', '');
                 modal.classList.add('open');
                 document.body.style.overflow = 'hidden';
                 input.focus();
@@ -243,7 +259,78 @@
             function closeModal() {
                 modal.classList.remove('open');
                 document.body.style.overflow = '';
+                setStatus('', '');
             }
+
+            // Reflect the saved text in the table immediately, without a full reload.
+            function refreshRow(recordId, reportText) {
+                var btn = document.querySelector('[data-report-modal][data-record-id="' + recordId + '"]');
+                if (!btn) return;
+                btn.setAttribute('data-report', reportText);
+                var row = btn.closest('tr');
+                var preview = row ? row.querySelector('.report-preview') : null;
+                if (!preview) return;
+                var trimmed = (reportText || '').trim();
+                if (trimmed && trimmed.indexOf('بانتظار كتابة') !== 0) {
+                    preview.textContent = reportText;
+                } else {
+                    preview.textContent = '';
+                    var empty = document.createElement('span');
+                    empty.className = 'report-empty';
+                    empty.textContent = 'بانتظار كتابة التقرير الطبي…';
+                    preview.appendChild(empty);
+                }
+            }
+
+            form.addEventListener('submit', function (event) {
+                // No fetch (very old browser): let the normal POST run.
+                if (!window.fetch) return;
+                // No confirm() gate: browsers that suppress dialogs return false silently,
+                // which made "حفظ التقرير" appear to do nothing. Saving is non-destructive.
+                event.preventDefault();
+
+                var recordId = recordIdInput.value;
+                var originalLabel = saveBtn.innerHTML;
+                saveBtn.disabled = true;
+                saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جارٍ الحفظ…';
+                setStatus('جارٍ حفظ التقرير…', 'info');
+
+                var body = new FormData();
+                body.append('record_id', recordId);
+                body.append('report', input.value);
+                body.append('next', nextInput.value || '/doctor');
+
+                fetch(form.getAttribute('action') || '/save-report', {
+                    method: 'POST',
+                    body: body,
+                    credentials: 'same-origin',
+                    headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+                }).then(function (response) {
+                    return response.json().then(function (payload) {
+                        return { ok: response.ok, payload: payload };
+                    }).catch(function () {
+                        return { ok: false, payload: { error: 'استجابة غير متوقعة من الخادم (رمز ' + response.status + ').' } };
+                    });
+                }).then(function (result) {
+                    if (!result.ok || !result.payload || result.payload.ok !== true) {
+                        setStatus((result.payload && result.payload.error) || 'تعذر حفظ التقرير. حاول مرة أخرى.', 'error');
+                        return;
+                    }
+                    setStatus(result.payload.message || 'تم حفظ التقرير بنجاح.', 'success');
+                    try {
+                        refreshRow(recordId, result.payload.report || '');
+                    } catch (refreshError) {
+                        // The report is saved in the database even if the row redraw hiccups.
+                        console.warn('report row refresh skipped:', refreshError);
+                    }
+                    window.setTimeout(closeModal, 900);
+                }).catch(function () {
+                    setStatus('تعذر الاتصال بالخادم. تحقق من الشبكة وحاول مرة أخرى.', 'error');
+                }).then(function () {
+                    saveBtn.disabled = false;
+                    saveBtn.innerHTML = originalLabel;
+                });
+            });
 
             document.querySelectorAll('[data-report-modal]').forEach(function (btn) {
                 btn.addEventListener('click', function () { openModal(btn); });

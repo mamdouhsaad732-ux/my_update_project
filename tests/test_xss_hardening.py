@@ -81,6 +81,24 @@ def test_script_in_report_is_escaped_on_secretary_dashboard(secretary_client):
     assert ESCAPED_IMG in body
 
 
+def test_script_in_report_is_escaped_on_admin_report_view(admin_client):
+    record_id = insert_record(report=XSS_REPORT)
+
+    body = admin_client.get(f"/doctor/report/{record_id}").text
+
+    assert XSS_REPORT not in body, "raw HTML payload rendered in admin report view"
+    assert ESCAPED_IMG in body
+
+
+def test_script_in_patient_name_is_escaped_on_admin_report_view(admin_client):
+    record_id = insert_record(name=XSS_NAME)
+
+    body = admin_client.get(f"/doctor/report/{record_id}").text
+
+    assert XSS_NAME not in body, "raw script tag rendered in admin report view"
+    assert ESCAPED_SCRIPT_LT in body
+
+
 # --- regression -------------------------------------------------------------------
 
 
